@@ -122,7 +122,7 @@ class MyTabView(ctk.CTkTabview):
         username = getpass.getuser()
 
 
-        # TODO - Will need to update this to a location you can choose.
+        # TODO - Will need to update this to a location you can choose. Will also need to fix all of the file locations as they were previously set up.
         folder = f"C:\\Users\\{username}"
 
         job_path = os.path.join(folder, selected_year, f"Job Tickets {selected_year}")
