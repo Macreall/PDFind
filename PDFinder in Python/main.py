@@ -6,8 +6,6 @@ import pdfplumber
 import os
 from difflib import SequenceMatcher
 import subprocess
-
-
 import tabView as tb
 
 
@@ -25,13 +23,17 @@ class App:
         self.root.bind("<Left>", self.prev_page)
 
 
-        bg_image = ctk.CTkImage(
-            light_image=Image.open("gray_background.jpg"),
-            size=(2000, 1800)
-        )
-
-        bg_label = ctk.CTkLabel(self.root, image=bg_image, text="")
-        bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        # Background image
+        try:
+            bg_image = ctk.CTkImage(
+                light_image=Image.open("gray_background.jpg"),
+                size=(2000, 1800))
+            
+            bg_label = ctk.CTkLabel(self.root, image=bg_image, text="")
+            bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        except FileNotFoundError as file_error:
+            print(f"Error, background image not found\n{file_error}")
+            self.root.configure(fg_color="#8097a2")
 
 
 
