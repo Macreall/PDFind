@@ -11,12 +11,12 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 
-#include "requirements/SDL2/SDL.h"
+#include "resources/SDL2/include/SDL.h"
 #include "GL/gl.h"
-#include "nuklear.h"
-#include "nuklear_sdl_gl2.h"
+#include "resources/nuklear.h"
+#include "resources/nuklear_sdl_gl2.h"
 #include <stdio.h>
-#include "stb_image.h"
+#include "resources/stb_image.h"
 
 
 void draw_background(GLuint bg_tex, int window_w, int window_h)
@@ -101,7 +101,7 @@ int main() {
     // Background Image
     int bg_tex;
     int w, h, n;
-    unsigned char* data = stbi_load("../gray_background.jpg", &w, &h, &n, 4);
+    unsigned char* data = stbi_load("../images/gray_background.jpg", &w, &h, &n, 4);
     if (!data) {
         printf("Failed to load image\n");
         return -1;
