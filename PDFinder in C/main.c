@@ -101,7 +101,7 @@ int main() {
     // Background Image
     int bg_tex;
     int w, h, n;
-    unsigned char* data = stbi_load("../images/gray_background.jpg", &w, &h, &n, 4);
+    unsigned char* data = stbi_load("../assets/images/gray_background.jpg", &w, &h, &n, 4);
     if (!data) {
         printf("Failed to load image\n");
         return -1;
