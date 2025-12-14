@@ -9,11 +9,46 @@
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
 
+#define STB_IMAGE_IMPLEMENTATION
+
 #include "SDL2/SDL.h"
 #include "GL/gl.h"
 #include "nuklear.h"
 #include "nuklear_sdl_gl2.h"
 #include <stdio.h>
+#include "stb_image.h"
+
+
+void draw_background(GLuint bg_tex, int window_w, int window_h)
+{
+    glViewport(0, 0, window_w, window_h);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0, window_w, window_h, 0, -1, 1); // top-left = (0,0)
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, bg_tex);
+
+    glBegin(GL_QUADS);
+    glTexCoord2f(0,0); glVertex2f(0,0);
+    glTexCoord2f(1,0); glVertex2f(window_w,0);
+    glTexCoord2f(1,1); glVertex2f(window_w,window_h);
+    glTexCoord2f(0,1); glVertex2f(0,window_h);
+    glEnd();
+
+    glDisable(GL_TEXTURE_2D);
+
+    glPopMatrix(); // MODELVIEW
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
 
 int main() {
     SDL_Init(SDL_INIT_VIDEO);
@@ -63,12 +98,30 @@ int main() {
     int active_tab = 0; // 0 = Tab1, 1 = Tab2
 
 
+    // Background Image
+    int bg_tex;
+    int w, h, n;
+    unsigned char* data = stbi_load("C:\\Users\\Macreal\\Desktop\\SDL App\\gray_background.jpg", &w, &h, &n, 4);
+    if (!data) {
+        printf("Failed to load image\n");
+        return -1;
+    }
+    glGenTextures(1, &bg_tex);
+    glBindTexture(GL_TEXTURE_2D, bg_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    stbi_image_free(data);
+
+
 
 
 
 
 
     while (running) {
+        float nkWinSize = 600;
+
         SDL_Event evt;
         nk_input_begin(ctx);
         while (SDL_PollEvent(&evt)) {
@@ -80,6 +133,9 @@ int main() {
         }
         nk_input_end(ctx);
 
+        draw_background(bg_tex, 1400, 800);   // ← draws your PNG/JPG
+
+
         // if (nk_begin(ctx, "PDFinder", nk_rect(1000, 50, 200, 250),
         //     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_CURSOR_RESIZE_TOP_LEFT_DOWN_RIGHT)) {
         //     printf("here");
@@ -89,8 +145,8 @@ int main() {
 
 
         /* ---- GUI ---- */
-        if (nk_begin(ctx, "PDFinder", nk_rect(50, 50, 800, 550),
-            NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_CURSOR_RESIZE_TOP_LEFT_DOWN_RIGHT))
+        if (nk_begin(ctx, "Left Side", nk_rect(50, 50, nkWinSize, 700),
+        NK_WINDOW_MOVABLE | NK_CURSOR_RESIZE_TOP_LEFT_DOWN_RIGHT))
         {
             // // Layout for row and column
             // nk_layout_row_static(ctx, 40, 120, 1);
@@ -120,13 +176,29 @@ int main() {
 
 
 
+
             nk_layout_row_static(ctx, 60, 120, 3);
+
+
             ctx->style.text.color = nk_rgb(255,255,255);
-            ctx->style.tab.padding.x = 5;
+
+            ctx->style.button.text_normal = nk_rgb(0,0,0);
+            ctx->style.button.text_hover = nk_rgb(0,0,0);
+
+
+
+            ctx->style.tab.padding.x = 0;
             ctx->style.tab.padding.y = 5;
+            ctx->style.tab.rounding = 900.f;
+
+
+
+
+
+
 
             // Tabs
-            nk_layout_row_static(ctx, 30, 120, 3); // row for 2 buttons
+            nk_layout_row_static(ctx, 30, nkWinSize / 4, 3); // row for 2 buttons
             if (nk_button_label(ctx, "Job Tickets")) active_tab = 0;
             if (nk_button_label(ctx, "Invoices")) active_tab = 1;
             if (nk_button_label(ctx, "Parts Receipts")) active_tab = 2;
@@ -188,10 +260,20 @@ int main() {
 
 
 
+
+        if (nk_begin(ctx, "Right side",
+            nk_rect(800, 50, 400, 700),
+            NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR))
+        {
+            nk_button_label(ctx, "Right side");
+        }
+        nk_end(ctx);
+
+
+
+
+
         /* DRAW */
-        glViewport(0, 0, 800, 600);
-        glClearColor(background.r/255.0f, background.g/255.0f, background.b/255.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
         nk_sdl_render(NK_ANTI_ALIASING_ON);
         SDL_GL_SwapWindow(win);
     }
