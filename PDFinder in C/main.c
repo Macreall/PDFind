@@ -11,7 +11,7 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 
-#include "SDL2/SDL.h"
+#include "requirements/SDL2/SDL.h"
 #include "GL/gl.h"
 #include "nuklear.h"
 #include "nuklear_sdl_gl2.h"
