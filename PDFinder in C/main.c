@@ -26,7 +26,7 @@ void draw_background(GLuint bg_tex, int window_w, int window_h)
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
-    glOrtho(0, window_w, window_h, 0, -1, 1); // top-left = (0,0)
+    glOrtho(0, window_w, window_h, 0, -1, 1);
 
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
@@ -44,7 +44,7 @@ void draw_background(GLuint bg_tex, int window_w, int window_h)
 
     glDisable(GL_TEXTURE_2D);
 
-    glPopMatrix(); // MODELVIEW
+    glPopMatrix();
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
@@ -60,10 +60,10 @@ int main() {
 
     SDL_GLContext gl_context = SDL_GL_CreateContext(win);
 
-    /* --- INIT NUKLEAR --- */
+    
     struct nk_context* ctx = nk_sdl_init(win);
 
-    /* --- SETUP FONT ATLAS --- */
+   
     struct nk_font_atlas* atlas;
     nk_sdl_font_stash_begin(&atlas);
     struct nk_font* font = nk_font_atlas_add_default(atlas, 14, 0);
@@ -133,18 +133,11 @@ int main() {
         }
         nk_input_end(ctx);
 
-        draw_background(bg_tex, 1400, 800);   // ← draws your PNG/JPG
-
-
-        // if (nk_begin(ctx, "PDFinder", nk_rect(1000, 50, 200, 250),
-        //     NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_CURSOR_RESIZE_TOP_LEFT_DOWN_RIGHT)) {
-        //     printf("here");
-        // }
+        draw_background(bg_tex, 1400, 800);   
 
 
 
-
-        /* ---- GUI ---- */
+        
         if (nk_begin(ctx, "Left Side", nk_rect(50, 50, nkWinSize, 700),
         NK_WINDOW_MOVABLE | NK_CURSOR_RESIZE_TOP_LEFT_DOWN_RIGHT))
         {
@@ -198,14 +191,14 @@ int main() {
 
 
             // Tabs
-            nk_layout_row_static(ctx, 30, nkWinSize / 4, 3); // row for 2 buttons
+            nk_layout_row_static(ctx, 30, nkWinSize / 4, 3); 
             if (nk_button_label(ctx, "Job Tickets")) active_tab = 0;
             if (nk_button_label(ctx, "Invoices")) active_tab = 1;
             if (nk_button_label(ctx, "Parts Receipts")) active_tab = 2;
 
 
-            // --- Tab content ---
-            nk_layout_row_dynamic(ctx, 300, 1); // dynamic area for content
+            
+            nk_layout_row_dynamic(ctx, 300, 1); 
             if (active_tab == 0) {
                 if (nk_group_begin(ctx, "Tab1", NK_WINDOW_BORDER)) {
                     nk_layout_row_dynamic(ctx, 30, 1);
@@ -213,7 +206,7 @@ int main() {
                     nk_checkbox_label(ctx, "Check me", &active);
 
                     // Entry
-                    nk_layout_row_static(ctx, 30, 220, 1); // row for 2 buttons
+                    nk_layout_row_static(ctx, 30, 220, 1); 
                     nk_edit_string_zero_terminated(ctx, NK_EDIT_SIMPLE, buffer, sizeof(buffer)-1, nk_filter_default);
 
                     nk_group_end(ctx);
@@ -225,7 +218,7 @@ int main() {
                     nk_slider_float(ctx, 0.0f, &value, 1.0f, 0.01f);
 
                     // Entry
-                    nk_layout_row_static(ctx, 30, 220, 1); // row for 2 buttons
+                    nk_layout_row_static(ctx, 30, 220, 1); 
                     nk_edit_string_zero_terminated(ctx, NK_EDIT_SIMPLE, buffer, sizeof(buffer)-1, nk_filter_default);
 
                     nk_group_end(ctx);
@@ -238,7 +231,7 @@ int main() {
                     nk_slider_float(ctx, 0.0f, &value, 1.0f, 0.01f);
 
                     // Entry
-                    nk_layout_row_static(ctx, 30, 220, 1); // row for 2 buttons
+                    nk_layout_row_static(ctx, 30, 220, 1); 
                     nk_edit_string_zero_terminated(ctx, NK_EDIT_SIMPLE, buffer, sizeof(buffer)-1, nk_filter_default);
 
                     nk_group_end(ctx);
@@ -273,7 +266,7 @@ int main() {
 
 
 
-        /* DRAW */
+        
         nk_sdl_render(NK_ANTI_ALIASING_ON);
         SDL_GL_SwapWindow(win);
     }
