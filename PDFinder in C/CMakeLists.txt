@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
-project(SDL_App C)
+project(PDFinder C)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -8,7 +8,8 @@ link_directories("resources/SDL2/lib")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m64")
 
+add_executable(PDFinder main.c)
 
-add_executable(SDL_App main.c)
+target_link_libraries(PDFinder SDL2 SDL2main opengl32)
 
-target_link_libraries(SDL_App SDL2 SDL2main opengl32)
+set_target_properties(PDFinder PROPERTIES OUTPUT_NAME "PDFinder")
