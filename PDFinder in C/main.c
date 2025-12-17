@@ -77,8 +77,8 @@ int main() {
     struct nk_font* georgia =
         nk_font_atlas_add_from_file(
             atlas,
-            "../assets/georgia.ttf",
-            20,          // font size
+            "../assets/fonts/georgia.ttf",
+            20,        
             NULL
         );
     nk_sdl_font_stash_end();
