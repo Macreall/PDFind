@@ -5,6 +5,17 @@
 #include <stdio.h>
 #include "resources.h"
 
+#include "mupdf/include/mupdf/fitz.h"
+
+
+
+
+struct fz_context *pdf_ctx = NULL;
+struct fz_document *doc = NULL;
+
+
+
+
 
 
 #define WM_TRAYICON (WM_USER + 1)
@@ -30,6 +41,8 @@ int screenWidth;
 int screenHeight;
 
 HWND hPdfImage = NULL;
+
+
 
 
 
@@ -883,10 +896,11 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     switch(msg) {
         case WM_CLOSE:
             DestroyWindow(hwnd);
-            break;
+            return 0;
         case WM_DESTROY:
             hSearchWnd= NULL;
-            break;
+            return 0;
+
 
         case WM_ERASEBKGND:
         {
@@ -1033,7 +1047,7 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
     if (!registered) {
         WNDCLASS wc;
         ZeroMemory(&wc, sizeof(wc));
-        wc.lpfnWndProc = SearchWndProc;
+        wc.lpfnWndProc = PopupWndProc;
         wc.hInstance = GetModuleHandle(NULL);
         wc.lpszClassName = CLASS_NAME;
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -1082,7 +1096,10 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
 
 
 
-
+    if (PopupWndProc) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
 
 
     return hwnd;
@@ -1105,32 +1122,15 @@ LRESULT CALLBACK FrameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch(msg)
     {
-        case WM_COMMAND:
-        {
+        case WM_COMMAND: {
             switch(LOWORD(wParam)) {
-                case IDC_SEARCH_BUTTON:
-                {
+                case IDC_SEARCH_BUTTON: {
 
-                    HBITMAP hBmp = (HBITMAP)LoadImageW(
-                        NULL,
-                        L"C:\\Users\\Macreal\\Desktop\\placeholder.pdf",
-                        IMAGE_BITMAP,
-                        0, 0,
-                        LR_LOADFROMFILE
-                    );
-
-                    if (hBmp) {
-                        HWND hPic = GetDlgItem(hwnd, 1234);
-                        SendMessage(hPic, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hBmp);
-                    } else {
-                        MessageBox(hwnd, L"Failed to load image", L"Error", MB_OK);
-                    }
-
-                    return 0;
-                    default: ;
                 }
-            }
-        } break;
+                default: ;
+            } break;
+        }
+
 
         case WM_ERASEBKGND:
         {
@@ -1176,8 +1176,92 @@ void MakeWindowRounded(HWND hwnd, int width, int height, int radius) {
 }
 
 
+LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch(msg)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+
+        if (pdf_ctx && doc)
+
+        {
+            // Load first page
+            fz_page *page = fz_load_page(pdf_ctx, doc, 0);
+
+            // Get page bounds
+            fz_rect page_box = fz_bound_page(pdf_ctx, page);
+
+            // Choose scale to fit
+            float xscale = (float)(rect.right - rect.left) / (page_box.x1 - page_box.x0);
+            float yscale = (float)(rect.bottom - rect.top) / (page_box.y1 - page_box.y0);
+            float scale = xscale < yscale ? xscale : yscale;
+
+            // Build transform matrix
+            fz_matrix ctm = fz_scale(scale, scale);
+
+            // Compute pixel rect
+            fz_rect pixel_rect = fz_transform_rect(page_box, ctm);
+            fz_irect bbox = fz_round_rect(pixel_rect);
+
+            // Create pixmap (with alpha)
+            fz_pixmap *pix = fz_new_pixmap_with_bbox(pdf_ctx,
+                                                      fz_device_rgb(pdf_ctx),
+                                                      bbox,
+                                                      NULL, // no separations
+                                                      1);   // alpha
+            fz_clear_pixmap_with_value(pdf_ctx, pix, 0xFF);
+
+            // Render into pixmap via draw device
+            fz_device *dev = fz_new_draw_device(pdf_ctx, ctm, pix);
+            fz_run_page(pdf_ctx, page, dev, ctm, NULL);
+            fz_drop_device(pdf_ctx, dev);
+
+            // Blit pixmap to HDC
+            int w = fz_pixmap_width(pdf_ctx, pix);
+            int h = fz_pixmap_height(pdf_ctx, pix);
+            unsigned char *samples = fz_pixmap_samples(pdf_ctx, pix);
+
+            BITMAPINFO bmi = {0};
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h; // top-down
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            StretchDIBits(hdc,
+                0, 0, rect.right, rect.bottom,
+                0, 0, w, h,
+                samples, &bmi, DIB_RGB_COLORS, SRCCOPY);
+
+            // Cleanup
+            fz_drop_pixmap(pdf_ctx, pix);
+            fz_drop_page(pdf_ctx, page);
+        }
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+
+    return 0;
+}
+
+
 
 HWND OpenSearchWindow(HWND hwndParent) {
+
+    MessageBox(NULL, L"Initalizing search window", L"Error", MB_OK);
+
 
     const wchar_t CLASS_NAME[] = L"Search Menu";
 
@@ -1257,33 +1341,30 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
-    hPdfImage = CreateWindowEx(
-        0,
-        L"STATIC",
-        NULL,
-        WS_CHILD | WS_VISIBLE | SS_BITMAP,
-        800, 50, 550, 700,
-        hwnd,
-        NULL,
-        g_hInstance,
-        NULL
-    );
 
+
+    WNDCLASS wcChild = {0};
+    wcChild.lpfnWndProc = PictureFrameProc;
+    wcChild.hInstance = g_hInstance;
+    wcChild.lpszClassName = L"PDFChild";
+    RegisterClass(&wcChild);
 
     HWND pictureFrame = CreateWindowEx(
             0,
-            L"STATIC",
-            NULL,
+            L"PDFChild",
+            L"PDF Viewer",
             WS_CHILD | WS_VISIBLE,
             800, 50, 600, 725,
             hwnd,
             NULL,
-            GetModuleHandle(NULL),
+            g_hInstance,
             NULL
         );
 
 
-
+    if (!pictureFrame) {
+        MessageBoxW(hwnd, L"Failed to create PDF frame", L"Error", MB_OK);
+    }
 
 
 
@@ -1308,6 +1389,53 @@ int WINAPI WinMain(
     LPSTR lpCmdLine,
     int nCmdShow
 ) {
+
+    MessageBox(NULL, L"Starting WinMain", L"Debug", MB_OK);
+
+
+    pdf_ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
+    if (!pdf_ctx)
+    {
+        MessageBox(NULL, L"Failed to create MuPDF context", L"Error", MB_OK);
+        return 1;
+    }
+
+    // 2. Register document handlers
+    fz_try(pdf_ctx)
+    {
+        fz_register_document_handlers(pdf_ctx);
+    }
+    fz_catch(pdf_ctx)
+    {
+        MessageBoxA(NULL, fz_caught_message(pdf_ctx), "Error registering handlers", MB_OK);
+        fz_drop_context(pdf_ctx);
+        return 1;
+    }
+
+    // 3. Path to PDF (make sure it exists!)
+    wchar_t wpath[] = L"C:\\Users\\Macreal\\Downloads\\Kami Export - new car quest-1.pdf";
+    char utf8_path[MAX_PATH * 3];
+    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
+    if (len == 0)
+    {
+        MessageBox(NULL, L"Failed to convert path to UTF-8", L"Error", MB_OK);
+        fz_drop_context(pdf_ctx);
+        return 1;
+    }
+
+    // 4. Open the PDF safely
+    fz_try(pdf_ctx)
+    {
+        doc = fz_open_document(pdf_ctx, utf8_path);
+    }
+    fz_catch(pdf_ctx)
+    {
+        MessageBoxA(NULL, fz_caught_message(pdf_ctx), "Failed to open PDF", MB_OK);
+        fz_drop_context(pdf_ctx);
+        return 1;
+    }
+
+    MessageBox(NULL, L"PDF successfully loaded!", L"Debug", MB_OK);
 
 
 
@@ -1349,12 +1477,20 @@ int WINAPI WinMain(
     CLASS_NAME,
     L"LISTBOX",
     WS_OVERLAPPEDWINDOW,
-    0, 0, 0, 0,
+    100, 100, 100, 100,
     NULL,
     NULL,
     hInstance,
     NULL
 );
+
+    if (!hwnd) {
+        MessageBox(NULL, L"Failed to create main window", L"Error", MB_OK);
+        return 1;
+    }
+
+    MessageBox(NULL, L"App is now opened", L"Debug", MB_OK);
+
 
     CreateThread(
     NULL,
@@ -1379,6 +1515,9 @@ int WINAPI WinMain(
 
     nid.uVersion = NOTIFYICON_VERSION;
     Shell_NotifyIcon(NIM_SETVERSION, &nid);
+
+
+    MessageBox(NULL, L"Messages are starting here", L"Debug", MB_OK);
 
 
     MSG msg;
@@ -1432,6 +1571,15 @@ int WINAPI WinMain(
             DispatchMessage(&msg);
         }
     }
+
+    MessageBox(NULL, L"App is now closing", L"Debug", MB_OK);
+
+
+    if(doc) fz_drop_document(pdf_ctx, doc);
+    if(pdf_ctx) fz_drop_context(pdf_ctx);
+
+
+
 
     return (int)msg.wParam;
 }
