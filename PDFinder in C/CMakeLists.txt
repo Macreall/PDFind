@@ -1,16 +1,22 @@
 cmake_minimum_required(VERSION 3.31)
-project(PDFinder C)
+project(FileWarden C)
 
 set(CMAKE_C_STANDARD 11)
 
-include_directories("resources/SDL2/include")
-link_directories("resources/SDL2/lib")
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m64")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -mwindows")
+add_executable(FileWarden WIN32 main.c app.rc
+        resources.h)
 
-add_executable(PDFinder main.c)
+set_property(TARGET FileWarden PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+)
 
-target_link_libraries(PDFinder SDL2 SDL2main opengl32)
 
-set_target_properties(PDFinder PROPERTIES OUTPUT_NAME "PDFinder")
+
+target_link_directories(FileWarden PRIVATE "./include")
+target_link_libraries(FileWarden PRIVATE 
+    libmupdf.lib libthirdparty.lib 
+    comctl32 legacy_stdio_definitions.lib
+    oldnames.lib)
+
+
