@@ -1,11 +1,9 @@
 #define UNICODE
-#include <windows.h>
-#include <commctrl.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include "resources.h"
 
-#include "mupdf/include/mupdf/fitz.h"
+
+
+#include "../resources.h"
+#include "PDF Parser.h"
 
 
 
@@ -1182,68 +1180,14 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     {
     case WM_PAINT:
     {
+
+
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
 
-        RECT rect;
-        GetClientRect(hwnd, &rect);
 
-        if (pdf_ctx && doc)
+        renderPDF(hdc, hwnd, pdf_ctx, doc);
 
-        {
-            // Load first page
-            fz_page *page = fz_load_page(pdf_ctx, doc, 0);
-
-            // Get page bounds
-            fz_rect page_box = fz_bound_page(pdf_ctx, page);
-
-            // Choose scale to fit
-            float xscale = (float)(rect.right - rect.left) / (page_box.x1 - page_box.x0);
-            float yscale = (float)(rect.bottom - rect.top) / (page_box.y1 - page_box.y0);
-            float scale = xscale < yscale ? xscale : yscale;
-
-            // Build transform matrix
-            fz_matrix ctm = fz_scale(scale, scale);
-
-            // Compute pixel rect
-            fz_rect pixel_rect = fz_transform_rect(page_box, ctm);
-            fz_irect bbox = fz_round_rect(pixel_rect);
-
-            // Create pixmap (with alpha)
-            fz_pixmap *pix = fz_new_pixmap_with_bbox(pdf_ctx,
-                                                      fz_device_rgb(pdf_ctx),
-                                                      bbox,
-                                                      NULL, // no separations
-                                                      1);   // alpha
-            fz_clear_pixmap_with_value(pdf_ctx, pix, 0xFF);
-
-            // Render into pixmap via draw device
-            fz_device *dev = fz_new_draw_device(pdf_ctx, ctm, pix);
-            fz_run_page(pdf_ctx, page, dev, ctm, NULL);
-            fz_drop_device(pdf_ctx, dev);
-
-            // Blit pixmap to HDC
-            int w = fz_pixmap_width(pdf_ctx, pix);
-            int h = fz_pixmap_height(pdf_ctx, pix);
-            unsigned char *samples = fz_pixmap_samples(pdf_ctx, pix);
-
-            BITMAPINFO bmi = {0};
-            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-            bmi.bmiHeader.biWidth = w;
-            bmi.bmiHeader.biHeight = -h; // top-down
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            StretchDIBits(hdc,
-                0, 0, rect.right, rect.bottom,
-                0, 0, w, h,
-                samples, &bmi, DIB_RGB_COLORS, SRCCOPY);
-
-            // Cleanup
-            fz_drop_pixmap(pdf_ctx, pix);
-            fz_drop_page(pdf_ctx, page);
-        }
 
         EndPaint(hwnd, &ps);
         return 0;
@@ -1382,6 +1326,8 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 }
 
+
+
 int WINAPI WinMain(
 
     HINSTANCE hInstance,
@@ -1389,6 +1335,9 @@ int WINAPI WinMain(
     LPSTR lpCmdLine,
     int nCmdShow
 ) {
+
+
+
 
     MessageBox(NULL, L"Starting WinMain", L"Debug", MB_OK);
 
@@ -1400,7 +1349,6 @@ int WINAPI WinMain(
         return 1;
     }
 
-    // 2. Register document handlers
     fz_try(pdf_ctx)
     {
         fz_register_document_handlers(pdf_ctx);
@@ -1412,7 +1360,6 @@ int WINAPI WinMain(
         return 1;
     }
 
-    // 3. Path to PDF (make sure it exists!)
     wchar_t wpath[] = L"C:\\Users\\Macreal\\Downloads\\Kami Export - new car quest-1.pdf";
     char utf8_path[MAX_PATH * 3];
     int len = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
@@ -1423,7 +1370,6 @@ int WINAPI WinMain(
         return 1;
     }
 
-    // 4. Open the PDF safely
     fz_try(pdf_ctx)
     {
         doc = fz_open_document(pdf_ctx, utf8_path);
