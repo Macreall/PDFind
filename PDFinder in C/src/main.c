@@ -10,7 +10,19 @@
 
 struct fz_context *pdf_ctx = NULL;
 struct fz_document *doc = NULL;
+int current_pdf_page = 0;
 
+
+
+void next_page(HWND hwnd) {
+    current_pdf_page++;
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
+void previous_page(HWND hwnd) {
+    current_pdf_page--;
+    InvalidateRect(hwnd, NULL, TRUE);
+}
 
 
 
@@ -149,8 +161,12 @@ void OpenSettings();
 
 
 
-void DestroyActiveFields(void)
-{
+void SaveLastPath(LPCWSTR filepath, LPCWSTR dest) {
+        WritePrivateProfileStringW(L"Undo", L"LastSrc", filepath, INI_PATH);
+        WritePrivateProfileStringW(L"Undo", L"LastDest", dest, INI_PATH);
+    }
+
+void DestroyActiveFields(void) {
     for (int i = 0; i < activeFieldCount; i++)
     {
         if (fieldLabels[i])   DestroyWindow(fieldLabels[i]);
@@ -674,6 +690,7 @@ void SaveFile(int currentPage) {
 
         MakeUniqueFilename(fullPath, fullPath);
 
+
         if (!CopyFileW(oldFile, fullPath, FALSE)) {
             DWORD err = GetLastError();
             wchar_t buf[512];
@@ -681,6 +698,7 @@ void SaveFile(int currentPage) {
             MessageBox(NULL, buf, L"Error", MB_OK | MB_ICONERROR | MB_TOPMOST);
         }
         else {
+            SaveLastPath(oldFile, fullPath);
             MessageBox(NULL, L"File Saved Successfully!", L"Success", MB_OK | MB_TOPMOST);
         }
     }
@@ -1178,6 +1196,19 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 {
     switch(msg)
     {
+    case WM_COMMAND:
+            switch (wParam)
+            {
+                case VK_LEFT:
+                    previous_page(hwnd);
+                    break;
+                case VK_RIGHT:
+                    next_page(hwnd);
+                    break;
+                default: ;
+            }
+
+
     case WM_PAINT:
     {
 
@@ -1186,7 +1217,7 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         HDC hdc = BeginPaint(hwnd, &ps);
 
 
-        renderPDF(hdc, hwnd, pdf_ctx, doc);
+        renderPDF(hdc, hwnd, pdf_ctx, doc, current_pdf_page);
 
 
         EndPaint(hwnd, &ps);
@@ -1328,6 +1359,8 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
+
+
 int WINAPI WinMain(
 
     HINSTANCE hInstance,
@@ -1360,7 +1393,7 @@ int WINAPI WinMain(
         return 1;
     }
 
-    wchar_t wpath[] = L"C:\\Users\\Macreal\\Downloads\\Kami Export - new car quest-1.pdf";
+    wchar_t wpath[] = L"C:\\Users\\Macreal\\Downloads\\placeholder.pdf";
     char utf8_path[MAX_PATH * 3];
     int len = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
     if (len == 0)
@@ -1480,35 +1513,68 @@ int WINAPI WinMain(
             activeTab = hPopupTab;
         }
 
+        HWND otherWnd = PictureFrameProc;
+
+
+        // TODO -- fix this code so that the left and right buttons work for each window
+
+        // if (PictureFrameProc && msg.hwnd &&
+        //     (msg.hwnd == PictureFrameProc || IsChild(PictureFrameProc, msg.hwnd)))
+        // {
+        //     ownerWnd = PictureFrameProc;
+        // }
+
 
         if (ownerWnd && msg.message == WM_KEYDOWN)
         {
             int page = TabCtrl_GetCurSel(activeTab);
 
-            switch (msg.wParam)
+            if (ownerWnd == hPopupWnd)
             {
-                case VK_LEFT:
-                    if (page > 0) {
-                        TabCtrl_SetCurSel(activeTab, page - 1);
-                        SetPage(page - 1);
-                    }
-                    continue;
+                switch (msg.wParam)
+                {
+                    case VK_LEFT:
+                        if (page > 0) {
+                            TabCtrl_SetCurSel(activeTab, page - 1);
+                            SetPage(page - 1);
+                        }
+                        continue;
 
-                case VK_RIGHT:
-                    if (page < 2) {
-                        TabCtrl_SetCurSel(activeTab, page + 1);
-                        SetPage(page + 1);
-                    }
-                    continue;
+                    case VK_RIGHT:
+                        if (page < 2) {
+                            TabCtrl_SetCurSel(activeTab, page + 1);
+                            SetPage(page + 1);
+                        }
+                        continue;
 
-                case VK_ESCAPE:
-                    DestroyWindow(ownerWnd);
-                    continue;
-                default: ;
+                    case VK_ESCAPE:
+                        DestroyWindow(ownerWnd);
+                        continue;
+                }
+            }
+            else if (ownerWnd == otherWnd)
+            {
+                MessageBox(NULL, L"otherwnd has opened", L"Debug", MB_OK);
+
+                switch (msg.wParam)
+                {
+                    case VK_LEFT:
+                        InvalidateRect(otherWnd, NULL, TRUE);
+                        previous_page(otherWnd);
+                        continue;
+                    case VK_RIGHT:
+                        InvalidateRect(otherWnd, NULL, TRUE);
+                        next_page(otherWnd);
+                        continue;
+                    case VK_ESCAPE:
+                        DestroyWindow(otherWnd);
+                        return 0;
+                        break;
+
+
+                }
             }
         }
-
-
 
         HWND hDlg = ownerWnd ? ownerWnd : msg.hwnd;
         if (!IsDialogMessage(hDlg, &msg))
