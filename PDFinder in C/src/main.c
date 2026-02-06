@@ -11,17 +11,18 @@
 struct fz_context *pdf_ctx = NULL;
 struct fz_document *doc = NULL;
 int current_pdf_page = 0;
+HWND g_pdfFrame = NULL;
 
 
 
-void next_page(HWND hwnd) {
+void next_page() {
     current_pdf_page++;
-    InvalidateRect(hwnd, NULL, TRUE);
+    InvalidateRect(g_pdfFrame, NULL, TRUE);
 }
 
-void previous_page(HWND hwnd) {
+void previous_page() {
     current_pdf_page--;
-    InvalidateRect(hwnd, NULL, TRUE);
+    InvalidateRect(g_pdfFrame, NULL, TRUE);
 }
 
 
@@ -32,6 +33,7 @@ void previous_page(HWND hwnd) {
 #define ID_TRAY_EXIT 1001
 #define ID_TRAY_SETTINGS  1002
 #define ID_TRAY_SEARCH  1003
+#define ID_TRAY_UNDO 1004
 #define IDC_COMBOBOX_DATES 101
 
 #define IDC_SAVE_BUTTON 105
@@ -154,6 +156,7 @@ u_int PAGE_COUNT = 0;
 void CreateFieldsFromTab(HWND parent, TAB_DATA* tab);
 HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text);
 HWND OpenSearchWindow(HWND hwndParent);
+LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void OpenSettings();
 
 
@@ -161,10 +164,23 @@ void OpenSettings();
 
 
 
-void SaveLastPath(LPCWSTR filepath, LPCWSTR dest) {
-        WritePrivateProfileStringW(L"Undo", L"LastSrc", filepath, INI_PATH);
-        WritePrivateProfileStringW(L"Undo", L"LastDest", dest, INI_PATH);
-    }
+void SaveLastPath(LPCWSTR src, LPCWSTR dest)
+{
+    WritePrivateProfileStringW(L"Undo", L"LastSrc", src, INI_PATH);
+    WritePrivateProfileStringW(L"Undo", L"LastDest", dest, INI_PATH);
+}
+
+void LoadLastPath(wchar_t* src, wchar_t* dest, DWORD size)
+{
+    GetPrivateProfileStringW(L"Undo", L"LastSrc",  L"", src,  size, INI_PATH);
+    GetPrivateProfileStringW(L"Undo", L"LastDest", L"", dest, size, INI_PATH);
+}
+
+void RemoveLastPath() {
+    WritePrivateProfileStringW(L"Undo",L"LastSrc", NULL, INI_PATH);
+    WritePrivateProfileStringW(L"Undo",L"LastDest", NULL, INI_PATH);
+
+}
 
 void DestroyActiveFields(void) {
     for (int i = 0; i < activeFieldCount; i++)
@@ -865,6 +881,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 HMENU menu = CreatePopupMenu();
 
                 AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH, L"Search");
+                AppendMenu(menu, MF_STRING, ID_TRAY_UNDO, L"Undo");
                 AppendMenu(menu, MF_STRING, ID_TRAY_SETTINGS, L"Settings");
                 AppendMenu(menu, MF_SEPARATOR, 0, NULL);
                 AppendMenu(menu, MF_STRING, ID_TRAY_EXIT, L"Quit");
@@ -889,6 +906,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             case ID_TRAY_SEARCH:
                     OpenSearchWindow(hwnd);
                     break;
+            case ID_TRAY_UNDO:
+
+                    wchar_t lastSrc[MAX_PATH];
+                    wchar_t lastDest[MAX_PATH];
+
+                    LoadLastPath(lastSrc, lastDest, MAX_PATH);
+
+                    if (lastSrc[0] && lastDest[0]) {
+                        MoveFileExW(lastDest, lastSrc, MOVEFILE_REPLACE_EXISTING);
+                    }
+
+                    else {
+                        MessageBox(hwnd, L"No items to undo.", L"Error", MB_OK);
+                    }
+
+
+
+                    break;
 
 
             default: ;
@@ -897,6 +932,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 
         case WM_DESTROY:
+            RemoveLastPath();
             Shell_NotifyIcon(NIM_DELETE, &nid);
             DestroyIcon(nid.hIcon);
             PostQuitMessage(0);
@@ -914,8 +950,15 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
-            hSearchWnd= NULL;
+            g_pdfFrame= NULL;
             return 0;
+
+        case WM_KEYDOWN:
+            switch (wParam) {
+            case VK_ESCAPE:
+                    DestroyWindow(hwnd);
+                default: ;
+            }
 
 
         case WM_ERASEBKGND:
@@ -943,6 +986,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             case WM_DESTROY:
                 hPopupWnd = NULL;
                 break;
+
             case WM_KEYDOWN:
             {
                 HWND hTab =
@@ -1179,6 +1223,25 @@ void RegisterFrameClass(HINSTANCE hInstance)
     }
 }
 
+void RegisterPictureFrameClass(HINSTANCE hInstance)
+{
+    static bool registered = false;
+    if (!registered)
+    {
+        WNDCLASS wcChild = {0};
+        wcChild.lpfnWndProc = PictureFrameProc;
+        wcChild.hInstance = g_hInstance;
+        wcChild.lpszClassName = L"PDFChild";
+        wcChild.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wcChild.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
+        RegisterClass(&wcChild);
+        registered = true;
+    }
+}
+
+
+
+
 
 void MakeWindowRounded(HWND hwnd, int width, int height, int radius) {
     RECT rc;
@@ -1196,17 +1259,34 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 {
     switch(msg)
     {
-    case WM_COMMAND:
-            switch (wParam)
-            {
-                case VK_LEFT:
-                    previous_page(hwnd);
-                    break;
-                case VK_RIGHT:
-                    next_page(hwnd);
-                    break;
+
+
+        case WM_SETFOCUS:
+            MessageBox(hwnd, L"PDF now has focus.", "Debug", MB_OK);
+            SetFocus(g_pdfFrame);
+            break;
+
+        case WM_KEYDOWN:
+        {
+            switch (wParam) {
+                case VK_UP:
+                    current_pdf_page++;
+                    InvalidateRect(g_pdfFrame, NULL, TRUE);
+                    return 0;
+
+                case VK_DOWN:
+                    current_pdf_page--;
+                    InvalidateRect(g_pdfFrame, NULL, TRUE);
+                    return 0;
+
+                case VK_ESCAPE:
+                    DestroyWindow(hwnd);
+                    return 0;
                 default: ;
             }
+
+            break;
+        }
 
 
     case WM_PAINT:
@@ -1235,7 +1315,7 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
 HWND OpenSearchWindow(HWND hwndParent) {
 
-    MessageBox(NULL, L"Initalizing search window", L"Error", MB_OK);
+    MessageBox(NULL, L"Initializing search window", L"Error", MB_OK);
 
 
     const wchar_t CLASS_NAME[] = L"Search Menu";
@@ -1318,17 +1398,13 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
-    WNDCLASS wcChild = {0};
-    wcChild.lpfnWndProc = PictureFrameProc;
-    wcChild.hInstance = g_hInstance;
-    wcChild.lpszClassName = L"PDFChild";
-    RegisterClass(&wcChild);
+   RegisterPictureFrameClass(GetModuleHandle(NULL));
 
     HWND pictureFrame = CreateWindowEx(
             0,
             L"PDFChild",
             L"PDF Viewer",
-            WS_CHILD | WS_VISIBLE,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             800, 50, 600, 725,
             hwnd,
             NULL,
@@ -1344,18 +1420,24 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
+    g_pdfFrame = hwnd;
 
 
 
 
 
+    if (SearchWndProc) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
 
-    ShowWindow(hwnd, SW_SHOW);
-    UpdateWindow(hwnd);
 
     return hwnd;
-
 }
+
+
+
+
 
 
 
@@ -1502,82 +1584,7 @@ int WINAPI WinMain(
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        HWND ownerWnd = NULL;
-        HWND activeTab = NULL;
-
-
-        if (hPopupWnd && msg.hwnd &&
-            (msg.hwnd == hPopupWnd || IsChild(hPopupWnd, msg.hwnd)))
-        {
-            ownerWnd = hPopupWnd;
-            activeTab = hPopupTab;
-        }
-
-        HWND otherWnd = PictureFrameProc;
-
-
-        // TODO -- fix this code so that the left and right buttons work for each window
-
-        // if (PictureFrameProc && msg.hwnd &&
-        //     (msg.hwnd == PictureFrameProc || IsChild(PictureFrameProc, msg.hwnd)))
-        // {
-        //     ownerWnd = PictureFrameProc;
-        // }
-
-
-        if (ownerWnd && msg.message == WM_KEYDOWN)
-        {
-            int page = TabCtrl_GetCurSel(activeTab);
-
-            if (ownerWnd == hPopupWnd)
-            {
-                switch (msg.wParam)
-                {
-                    case VK_LEFT:
-                        if (page > 0) {
-                            TabCtrl_SetCurSel(activeTab, page - 1);
-                            SetPage(page - 1);
-                        }
-                        continue;
-
-                    case VK_RIGHT:
-                        if (page < 2) {
-                            TabCtrl_SetCurSel(activeTab, page + 1);
-                            SetPage(page + 1);
-                        }
-                        continue;
-
-                    case VK_ESCAPE:
-                        DestroyWindow(ownerWnd);
-                        continue;
-                }
-            }
-            else if (ownerWnd == otherWnd)
-            {
-                MessageBox(NULL, L"otherwnd has opened", L"Debug", MB_OK);
-
-                switch (msg.wParam)
-                {
-                    case VK_LEFT:
-                        InvalidateRect(otherWnd, NULL, TRUE);
-                        previous_page(otherWnd);
-                        continue;
-                    case VK_RIGHT:
-                        InvalidateRect(otherWnd, NULL, TRUE);
-                        next_page(otherWnd);
-                        continue;
-                    case VK_ESCAPE:
-                        DestroyWindow(otherWnd);
-                        return 0;
-                        break;
-
-
-                }
-            }
-        }
-
-        HWND hDlg = ownerWnd ? ownerWnd : msg.hwnd;
-        if (!IsDialogMessage(hDlg, &msg))
+        if (!IsDialogMessage(msg.hwnd, &msg))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
