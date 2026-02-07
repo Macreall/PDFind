@@ -15,7 +15,10 @@ HWND g_pdfFrame = NULL;
 HWND g_pictureFrame = NULL;
 
 
+
+
 int total_pages = 0;
+
 
 
 void next_page(int total_pages) {
@@ -162,6 +165,8 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text);
 HWND OpenSearchWindow(HWND hwndParent);
 LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void OpenSettings();
+LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 
 
 
@@ -418,6 +423,101 @@ void LoadTabsFromIni(HWND hTab)
 
 
 
+void CreateFieldsFromTabForSearchWindow(HWND parent, TAB_DATA* tab)
+{
+
+    int y = 50;
+    int xCtrl  = 50;
+
+    int widthCtrl = 150;
+    int heightCtrl = 20;
+
+
+    RECT rc;
+    GetClientRect(parent, &rc);
+
+    int baseX = rc.left;
+    int baseY = rc.top;
+
+
+
+    for (int i = 0; i < tab->fieldCount; i++)
+    {
+        FIELD_DATA* f = &tab->fields[i];
+
+        int drawX = baseX + ((f->x != -1) ? f->x : xCtrl);
+        int drawY = baseY + ((f->y != -1) ? f->y : y);
+
+        int drawWidth  = (f->width != -1) ? f->width : widthCtrl;
+        int drawHeight = (f->height != -1) ? f->height : heightCtrl;
+
+
+        swprintf_s(key, 64, L"Field%d.SkipRecent", i);
+        f->skipRecent = GetPrivateProfileIntW(tab->iniSection, key, 0, INI_PATH) != 0;
+
+
+
+        fieldLabels[i] = CreateWindowW(
+            L"STATIC",
+            f->label,
+            WS_CHILD | WS_VISIBLE,
+            drawX, drawY - 20,
+            180, 20,
+            parent,
+            NULL,
+            g_hInstance,
+            NULL
+        );
+
+        switch (f->controlType)
+        {
+            case FIELD_EDIT:
+                f->hControl = CreateWindowExW(
+                    WS_EX_CLIENTEDGE,
+                    L"EDIT",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                    drawX, drawY,
+                    drawWidth, drawHeight,
+                    parent,
+                    NULL,
+                    g_hInstance,
+                    NULL
+                );
+
+                y += 50;
+                break;
+
+            case FIELD_COMBO:
+                f->hControl = CreateWindowW(
+                    WC_COMBOBOX,
+                    L"",
+                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
+                    drawX, drawY,
+                    drawWidth, drawHeight,
+                    parent,
+                    NULL,
+                    g_hInstance,
+                    NULL
+                );
+                y += 50;
+                break;
+            default: ;
+        }
+
+
+
+        if (f->controlType == FIELD_COMBO)
+        {
+            PopulateControlData(f);
+        }
+
+        fieldControls[i] = f->hControl;
+
+
+        activeFieldCount++;
+    }
+}
 
 
 
@@ -776,6 +876,8 @@ void SetPage(int newPage)
         TabCtrl_SetCurSel(hPopupTab, newPage);
 
     CreateFieldsFromTab(hPopupWnd, &Tabs[newPage]);
+    CreateFieldsFromTabForSearchWindow(g_pdfFrame, &Tabs[newPage]);
+
 
     CreateButtons(hPopupWnd, newPage);
 
@@ -957,6 +1059,18 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             g_pdfFrame= NULL;
             return 0;
 
+        case WM_NOTIFY:
+        {
+            LPNMHDR pnmh = (LPNMHDR)lParam;
+
+            if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
+            {
+                int newPage = TabCtrl_GetCurSel(hPopupTab);
+                SetPage(newPage);
+            }
+        }
+            break;
+
         case WM_KEYDOWN:
             switch (wParam) {
             case VK_ESCAPE:
@@ -964,6 +1078,26 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 default: ;
             }
             break;
+
+
+        case WM_SIZE:
+            int width  = LOWORD(lParam);
+            int height = HIWORD(lParam);
+
+            int pdfW = width * 0.4;
+            int pdfH = height - 100;
+            int pdfX = width - pdfW - 20;
+            int pdfY = height - pdfH - 20;
+
+            MoveWindow(
+            g_pictureFrame,
+            pdfX,
+            pdfY,
+            pdfW,
+            pdfH,
+            TRUE
+            );
+
 
 
         case WM_ERASEBKGND:
@@ -980,6 +1114,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         default:
             return DefWindowProc(hwnd, msg, wParam, lParam);
     }
+    return 0;
 }
 
 LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1256,7 +1391,6 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 
-    return 0;
 }
 
 
@@ -1350,6 +1484,9 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
    RegisterPictureFrameClass(GetModuleHandle(NULL));
+
+
+
 
     HWND pictureFrame = CreateWindowEx(
             0,
@@ -1552,10 +1689,6 @@ int WINAPI WinMain(
 
 
 
-
-
-
-        
         if (g_pdfFrame && IsWindow(g_pdfFrame))
         {
 
@@ -1580,6 +1713,9 @@ int WINAPI WinMain(
                 PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
             }
         }
+
+
+
 
 
         if (!IsDialogMessage(msg.hwnd, &msg))
