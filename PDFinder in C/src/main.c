@@ -992,17 +992,6 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             hPopupWnd = NULL;
             break;
 
-        case WM_KEYDOWN:
-        {
-            switch (wParam) {
-                case VK_ESCAPE:
-                    DestroyWindow(hwnd);
-                default: ;
-            }
-            break;
-        }
-
-
 
         case WM_NOTIFY:
         {
@@ -1059,6 +1048,7 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     break;
             default: ;
             }
+            break;
 
 
         case WM_ERASEBKGND:
@@ -1552,6 +1542,20 @@ int WINAPI WinMain(
     while (GetMessage(&msg, NULL, 0, 0))
     {
 
+        if (hPopupWnd && IsWindow(hPopupWnd))
+        {
+            if (IsDialogMessage(hPopupWnd, &msg))
+                continue;
+        }
+
+
+
+
+
+
+
+
+        
         if (g_pdfFrame && IsWindow(g_pdfFrame))
         {
 
