@@ -12,17 +12,20 @@ struct fz_context *pdf_ctx = NULL;
 struct fz_document *doc = NULL;
 int current_pdf_page = 0;
 HWND g_pdfFrame = NULL;
+HWND g_pictureFrame = NULL;
 
 
+int total_pages = 0;
 
-void next_page() {
-    current_pdf_page++;
-    InvalidateRect(g_pdfFrame, NULL, TRUE);
+
+void next_page(int total_pages) {
+    if (current_pdf_page < total_pages - 1)
+        current_pdf_page++;
 }
 
 void previous_page() {
-    current_pdf_page--;
-    InvalidateRect(g_pdfFrame, NULL, TRUE);
+    if (current_pdf_page > 0)
+        current_pdf_page--;
 }
 
 
@@ -30,6 +33,7 @@ void previous_page() {
 
 
 #define WM_TRAYICON (WM_USER + 1)
+#define WM_APP_REDRAW_PDF   (WM_APP + 1)
 #define ID_TRAY_EXIT 1001
 #define ID_TRAY_SETTINGS  1002
 #define ID_TRAY_SEARCH  1003
@@ -959,6 +963,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     DestroyWindow(hwnd);
                 default: ;
             }
+            break;
 
 
         case WM_ERASEBKGND:
@@ -977,124 +982,101 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
 }
 
-    LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-        int currentPage = g_CurrentPage;
-        switch(msg) {
-            case WM_CLOSE:
-                DestroyWindow(hwnd);
-                break;
-            case WM_DESTROY:
-                hPopupWnd = NULL;
-                break;
+LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    int currentPage = g_CurrentPage;
+    switch(msg) {
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            break;
+        case WM_DESTROY:
+            hPopupWnd = NULL;
+            break;
 
-            case WM_KEYDOWN:
+        case WM_KEYDOWN:
+        {
+            switch (wParam) {
+                case VK_ESCAPE:
+                    DestroyWindow(hwnd);
+                default: ;
+            }
+            break;
+        }
+
+
+
+        case WM_NOTIFY:
+        {
+            LPNMHDR pnmh = (LPNMHDR)lParam;
+
+            if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
             {
-                HWND hTab =
-                    (hwnd == hPopupWnd)    ? hPopupTab    :
-                    NULL;
+                int newPage = TabCtrl_GetCurSel(hPopupTab);
+                SetPage(newPage);
+            }
+        }
+            break;
+        case WM_COMMAND:
+            switch (LOWORD(wParam)) {
+            case CBN_SELCHANGE: {
+                FIELD_DATA* f = FindFieldByHwnd((HWND)lParam);
+                if (f && f->controlType == FIELD_COMBO && !f->skipRecent) {
+                    int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
+                    if (sel != CB_ERR) {
+                        SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
+                        f->userChanged = TRUE;
 
-                if (!hTab)
-                    break;
+                        int fieldIndex = (int)(f - &Tabs[g_CurrentPage].fields[0]);
 
-                int page = TabCtrl_GetCurSel(hTab);
-
-                switch (wParam) {
-                    case VK_LEFT:
-                        if (page > 0) {
-                            TabCtrl_SetCurSel(hTab, page - 1);
-                            SetPage(page - 1);
-                        }
-                        return 0;
-
-                    case VK_RIGHT:
-                        if (page < PAGE_COUNT - 1) {
-                            TabCtrl_SetCurSel(hTab, page + 1);
-                            SetPage(page + 1);
-                        }
-                        return 0;
-
-                    case VK_ESCAPE:
-                        DestroyWindow(hwnd);
-                        return 0;
-                    default: ;
+                        wchar_t key[64];
+                        swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
+                        WritePrivateProfileStringW(
+                            Tabs[g_CurrentPage].iniSection,
+                            key,
+                            f->lastComboValue,
+                            INI_PATH
+                        );
+                    }
                 }
 
                 break;
             }
 
-            case WM_NOTIFY:
-            {
-                LPNMHDR pnmh = (LPNMHDR)lParam;
+            case IDC_SAVE_BUTTON:
 
-                if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
-                {
-                    int newPage = TabCtrl_GetCurSel(hPopupTab);
-                    SetPage(newPage);
-                }
-            }
-                break;
-            case WM_COMMAND:
-                switch (LOWORD(wParam)) {
-                case CBN_SELCHANGE: {
-                    FIELD_DATA* f = FindFieldByHwnd((HWND)lParam);
-                    if (f && f->controlType == FIELD_COMBO && !f->skipRecent) {
-                        int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
-                        if (sel != CB_ERR) {
-                            SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
-                            f->userChanged = TRUE;
 
-                            int fieldIndex = (int)(f - &Tabs[g_CurrentPage].fields[0]);
-
-                            wchar_t key[64];
-                            swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
-                            WritePrivateProfileStringW(
-                                Tabs[g_CurrentPage].iniSection,
-                                key,
-                                f->lastComboValue,
-                                INI_PATH
-                            );
-                        }
+                    if (!IsFileSendReady(currentPage)) {
+                        MessageBox(hwnd, L"Please fill in all required fields before saving file.", L"Warning", MB_OK | MB_ICONWARNING);
+                        break;
                     }
 
+
+                    SaveFile(currentPage);
+
+
+                    DestroyWindow(hwnd);
+
+
                     break;
-                }
-
-                case IDC_SAVE_BUTTON:
-
-
-                        if (!IsFileSendReady(currentPage)) {
-                            MessageBox(hwnd, L"Please fill in all required fields before saving file.", L"Warning", MB_OK | MB_ICONWARNING);
-                            break;
-                        }
-
-
-                        SaveFile(currentPage);
-
-
-                        DestroyWindow(hwnd);
-
-
-                        break;
-                default: ;
-                }
-
-
-            case WM_ERASEBKGND:
-            {
-                HDC hdc = (HDC)wParam;
-                RECT rc;
-                GetClientRect(hwnd, &rc);
-                HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
-                FillRect(hdc, &rc, hBrush);
-                DeleteObject(hBrush);
-                return 1;
+            default: ;
             }
 
-            default:
-                return DefWindowProc(hwnd, msg, wParam, lParam);
+
+        case WM_ERASEBKGND:
+        {
+            HDC hdc = (HDC)wParam;
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
+            FillRect(hdc, &rc, hBrush);
+            DeleteObject(hBrush);
+            return 1;
         }
-        return 0;
+
+        default:
+            return DefWindowProc(hwnd, msg, wParam, lParam);
     }
+    return 0;
+}
 
 
 HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
@@ -1259,34 +1241,10 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 {
     switch(msg)
     {
-
-
-        case WM_SETFOCUS:
-            MessageBox(hwnd, L"PDF now has focus.", "Debug", MB_OK);
-            SetFocus(g_pdfFrame);
-            break;
-
-        case WM_KEYDOWN:
-        {
-            switch (wParam) {
-                case VK_UP:
-                    current_pdf_page++;
-                    InvalidateRect(g_pdfFrame, NULL, TRUE);
-                    return 0;
-
-                case VK_DOWN:
-                    current_pdf_page--;
-                    InvalidateRect(g_pdfFrame, NULL, TRUE);
-                    return 0;
-
-                case VK_ESCAPE:
-                    DestroyWindow(hwnd);
-                    return 0;
-                default: ;
-            }
-
-            break;
-        }
+        case WM_APP_REDRAW_PDF:
+            InvalidateRect(hwnd, NULL, TRUE);
+            UpdateWindow(hwnd);
+            return 0;
 
 
     case WM_PAINT:
@@ -1359,6 +1317,9 @@ HWND OpenSearchWindow(HWND hwndParent) {
     if (!hwnd)
         return NULL;
 
+    g_pdfFrame = hwnd;
+
+
 
 
     RegisterFrameClass(GetModuleHandle(NULL));
@@ -1417,10 +1378,12 @@ HWND OpenSearchWindow(HWND hwndParent) {
         MessageBoxW(hwnd, L"Failed to create PDF frame", L"Error", MB_OK);
     }
 
+    g_pictureFrame = pictureFrame;
 
 
 
-    g_pdfFrame = hwnd;
+
+
 
 
 
@@ -1429,6 +1392,8 @@ HWND OpenSearchWindow(HWND hwndParent) {
     if (SearchWndProc) {
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
+        SetFocus(hwnd);
     }
 
 
@@ -1495,6 +1460,8 @@ int WINAPI WinMain(
         fz_drop_context(pdf_ctx);
         return 1;
     }
+
+    int total_pages = fz_count_pages(pdf_ctx, doc);
 
     MessageBox(NULL, L"PDF successfully loaded!", L"Debug", MB_OK);
 
@@ -1584,6 +1551,33 @@ int WINAPI WinMain(
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0))
     {
+
+        if (g_pdfFrame && IsWindow(g_pdfFrame))
+        {
+
+            HWND focused = GetForegroundWindow();
+
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
+                if (focused == g_pdfFrame || IsChild(g_pdfFrame, focused))
+                {
+                    DestroyWindow(g_pdfFrame);
+                    g_pdfFrame = NULL;
+                    continue;
+                }
+            }
+
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_UP) {
+                previous_page();
+                PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
+            }
+
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_DOWN) {
+                next_page(total_pages);
+                PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
+            }
+        }
+
+
         if (!IsDialogMessage(msg.hwnd, &msg))
         {
             TranslateMessage(&msg);
