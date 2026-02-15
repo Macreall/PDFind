@@ -14,10 +14,61 @@ int current_pdf_page = 0;
 HWND g_pdfFrame = NULL;
 HWND g_pictureFrame = NULL;
 
-
-
+HWND hToolbar = NULL;
 
 int total_pages = 0;
+
+wchar_t* current_opened_pdf = NULL;
+
+
+
+
+HBITMAP g_pdfBitmap = NULL;
+HDC     g_pdfMemDC = NULL;
+
+int pdfWidth = 0;
+int pdfHeight = 0;
+
+int pageHeights[256];
+
+
+#define PAGE_W  650
+#define PAGE_H  755
+#define PAGE_GAP 20   // spacing between pages
+
+HWND hPageLabel = NULL;
+HWND hSearchCountLabel = NULL;
+
+
+
+WNDPROC g_oldLabelProc = NULL;
+
+
+
+#define MAX_RESULTS 256
+
+typedef struct {
+    wchar_t fullPath[MAX_PATH];
+} FOUND_FILE;
+
+typedef struct {
+    FOUND_FILE items[MAX_RESULTS];
+    int count;
+} FOUND_LIST;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -123,7 +174,8 @@ typedef struct {
     FIELD_DATA fields[16];
     u_int fieldCount;
 
-    bool hasButton;
+    HWND hButton;
+    LPCWSTR iniPath;
 } TAB_DATA;
 
 typedef struct {
@@ -172,6 +224,251 @@ void OpenSettings(HWND hwnd);
 LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
+
+
+
+
+
+BOOL FilenameContains(const wchar_t* filename, const wchar_t* text)
+{
+    if (!text[0]) return FALSE;
+
+    wchar_t f[MAX_PATH], t[256];
+
+    wcscpy_s(f, MAX_PATH, filename);
+    wcscpy_s(t, 256, text);
+
+    _wcslwr_s(f, MAX_PATH);
+    _wcslwr_s(t, 256);
+
+    return wcsstr(f, t) != NULL;
+}
+
+void AddFound(FOUND_LIST* list, const wchar_t* path)
+{
+    if (list->count >= MAX_RESULTS)
+        return;
+
+    wcscpy_s(list->items[list->count].fullPath, MAX_PATH, path);
+    list->count++;
+}
+
+void SearchFolder(
+    const wchar_t* folder,
+    TAB_DATA* tab,
+    FOUND_LIST* results
+)
+{
+    wchar_t pattern[MAX_PATH];
+    swprintf_s(pattern, MAX_PATH, L"%s\\*", folder);
+
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(pattern, &fd);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return;
+
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+
+        for (int i = 0; i < tab->fieldCount; i++) {
+
+            wchar_t text[256];
+            FIELD_DATA* f = &tab->fields[i];
+            if (!f->hControl) continue;
+
+            GetWindowTextW(f->hControl, text, 256);
+
+            if (FilenameContains(fd.cFileName, text)) {
+
+                wchar_t fullPath[MAX_PATH];
+                swprintf_s(fullPath, MAX_PATH, L"%s\\%s", folder, fd.cFileName);
+
+                AddFound(results, fullPath);
+                break; // avoid duplicates
+            }
+        }
+
+    } while (FindNextFileW(hFind, &fd));
+
+    FindClose(hFind);
+}
+
+void SearchFromIniPaths(int currentPage, FOUND_LIST* results)
+{
+    TAB_DATA* tab = &Tabs[currentPage];
+
+    for (int p = 1; p <= 10; p++) {
+
+        wchar_t key[32];
+        swprintf_s(key, 32, L"Path%d", p);
+
+        wchar_t folder[512];
+        GetPrivateProfileStringW(
+            tab->iniSection,
+            key,
+            L"",
+            folder,
+            512,
+            INI_SAVE
+        );
+
+        if (!folder[0])
+            break;
+
+        SearchFolder(folder, tab, results);
+    }
+}
+
+
+void FindFilesFromTab(int currentPage)
+{
+    MessageBoxW(NULL, L"Now searching for files", L"Searching", MB_OK);
+
+
+    FOUND_LIST* results = calloc(1, sizeof(FOUND_LIST));
+    if (!results) return;
+
+    SearchFromIniPaths(currentPage, results);
+
+    MessageBoxW(NULL, L"Done Searching", L"Searching", MB_OK);
+
+
+    if (results->count == 0) {
+        MessageBoxW(NULL, L"No files found", L"Search", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    // Show first match immediately
+    MessageBoxW(NULL, results->items[0].fullPath, L"First Match", MB_OK);
+
+    // Others now live in results list
+    for (int i = 1; i < results->count; i++) {
+        // You can push to UI listbox, combo, etc later
+        OutputDebugStringW(results->items[i].fullPath);
+        OutputDebugStringW(L"\n");
+    }
+
+    free(results);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+void RenderPageToCache(HWND hwnd)
+{
+    if (g_pdfBitmap) {
+        DeleteObject(g_pdfBitmap);
+        DeleteDC(g_pdfMemDC);
+    }
+
+    HDC hdc = GetDC(hwnd);
+
+    // calculate total height for stacked bitmap
+    pdfWidth = PAGE_W;
+    pdfHeight = 0;  // we’ll accumulate
+    int pageHeights[256]; // store each page height
+    for (int i = 0; i < total_pages; i++) {
+        fz_page* page = fz_load_page(pdf_ctx, doc, i);
+        fz_rect bounds = fz_bound_page(pdf_ctx, page);
+        fz_irect ib = fz_round_rect(bounds);
+        pageHeights[i] = (ib.y1 - ib.y0) + PAGE_GAP;
+        pdfHeight += pageHeights[i];
+        fz_drop_page(pdf_ctx, page);
+    }
+
+    g_pdfMemDC = CreateCompatibleDC(hdc);
+    g_pdfBitmap = CreateCompatibleBitmap(hdc, pdfWidth, pdfHeight);
+    SelectObject(g_pdfMemDC, g_pdfBitmap);
+
+    // fill background
+    HBRUSH bg = CreateSolidBrush(RGB(220, 220, 220));
+    RECT r = { 0,0,pdfWidth,pdfHeight };
+    FillRect(g_pdfMemDC, &r, bg);
+    DeleteObject(bg);
+
+    int y_offset = 0;
+    for (int i = 0; i < total_pages; i++) {
+        fz_page* page = fz_load_page(pdf_ctx, doc, i);
+        fz_rect bounds = fz_bound_page(pdf_ctx, page);
+        fz_irect ib = fz_round_rect(bounds);
+
+        int pageW = ib.x1 - ib.x0;
+        int pageH = ib.y1 - ib.y0;
+
+        pageHeights[i] = pageH + PAGE_GAP;  // store page height + gap
+
+
+        // page background
+        RECT pr = { 0, y_offset, PAGE_W, y_offset + pageH };
+        HBRUSH white = CreateSolidBrush(RGB(255, 255, 255));
+        FillRect(g_pdfMemDC, &pr, white);
+        DeleteObject(white);
+
+        // 🔑 trick: translate matrix by (-x0, -y0) so content aligns top-left
+        fz_matrix ctm = fz_translate(-bounds.x0, -bounds.y0);
+
+        fz_pixmap* pix = fz_new_pixmap_with_bbox(
+            pdf_ctx,
+            fz_device_rgb(pdf_ctx),
+            fz_round_rect(fz_transform_rect(bounds, ctm)),
+            NULL,
+            1
+        );
+        fz_clear_pixmap_with_value(pdf_ctx, pix, 255);
+
+        fz_device* dev = fz_new_draw_device(pdf_ctx, ctm, pix);
+        fz_run_page(pdf_ctx, page, dev, ctm, NULL);
+        fz_drop_device(pdf_ctx, dev);
+
+        // copy pixmap to bitmap at y_offset
+        BITMAPINFO bmi = { 0 };
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = fz_pixmap_width(pdf_ctx, pix);
+        bmi.bmiHeader.biHeight = -fz_pixmap_height(pdf_ctx, pix); // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        StretchDIBits(
+            g_pdfMemDC,
+            0, y_offset,
+            pdfWidth, pageH,
+            0, 0,
+            fz_pixmap_width(pdf_ctx, pix),
+            fz_pixmap_height(pdf_ctx, pix),
+            fz_pixmap_samples(pdf_ctx, pix),
+            &bmi,
+            DIB_RGB_COLORS,
+            SRCCOPY
+        );
+
+        y_offset += pageH + PAGE_GAP;
+
+        fz_drop_pixmap(pdf_ctx, pix);
+        fz_drop_page(pdf_ctx, page);
+    }
+
+    ReleaseDC(hwnd, hdc);
+    scrollY = 0;
+    maxScroll = pdfHeight - PAGE_H; 
+    if (maxScroll < 0) maxScroll = 0;
+}
+
+
+
+void getCurrentPDFPage() {
+
+}
 
 
 
@@ -532,43 +829,41 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath)
 }
 
 
-void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath) {
-    if (hButton) {
-        DestroyWindow(hButton);
-        hButton = NULL;
+void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, UINT btnID) {
+    TAB_DATA* tab = &Tabs[pageIndex];
+
+    // Destroy old button if it exists
+    if (tab->hButton && IsWindow(tab->hButton)) {
+        DestroyWindow(tab->hButton);
+        tab->hButton = NULL;
     }
 
     BUTTON_DATA btn;
-    if (!LoadButtonData(Tabs[pageIndex].iniSection, &btn, iniPath))
+    if (!LoadButtonData(tab->iniSection, &btn, iniPath))
         return;
 
     RECT rc;
     GetClientRect(parent, &rc);
     TabCtrl_AdjustRect(parent, FALSE, &rc);
 
-
-
-
     int drawX = rc.left + btn.x;
-    int drawY = rc.top  + btn.y;
+    int drawY = rc.top + btn.y;
 
+    tab->hButton = CreateWindowW(
+        L"BUTTON",
+        btn.text,
+        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
+        drawX, drawY,
+        btn.width, btn.height,
+        parent,
+        (HMENU)(INT_PTR)btnID, // unique per purpose (IDC_SAVE_BUTTON / IDC_SEARCH_BUTTON)
+        g_hInstance,
+        NULL
+    );
 
-    if (hPopupTab || LoadButtonData(Tabs[pageIndex].iniSection, &btn, iniPath)) {
-        hButton = CreateWindowW(
-            L"BUTTON",
-            btn.text,
-            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
-            drawX,
-            drawY,
-            btn.width,
-            btn.height,
-            GetParent(parent),
-            (HMENU)IDC_SAVE_BUTTON,
-            g_hInstance,
-            NULL
-        );
-    }
+    tab->iniPath = iniPath; // optional: remember which INI created it
 }
+
 
 
 
@@ -786,14 +1081,14 @@ void SetPage(int newPage, LPCWSTR iniPath, HWND hwndParent)
 
     if (hPopupTab && IsWindow(hPopupTab)) {
         TabCtrl_SetCurSel(hPopupTab, newPage);
-        CreateFieldsFromTab(hPopupWnd, &Tabs[newPage], iniPath);
-        CreateButtons(hPopupTab, newPage, iniPath);
+        CreateFieldsFromTab(hPopupWnd, &Tabs[newPage], INI_SAVE);
+        CreateButtons(hPopupWnd, newPage, INI_SAVE, IDC_SAVE_BUTTON);
     }
 
     else if (hSearchTab && IsWindow(hSearchTab)) {
         TabCtrl_SetCurSel(hSearchTab, newPage);
-        CreateFieldsFromTab(frame, &Tabs[newPage], iniPath);
-        CreateButtons(hSearchTab, newPage, iniPath);
+        CreateFieldsFromTab(frame, &Tabs[newPage], INI_SEARCH);
+        CreateButtons(hwndParent, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
     }
 
 
@@ -872,6 +1167,35 @@ DWORD WINAPI WatchFolder(LPVOID lpParam) {
 }
 
 
+LRESULT CALLBACK LabelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_PAINT:
+        {
+
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(hdc, TRANSPARENT);
+
+        DefWindowProc(hwnd, WM_PAINT, (WPARAM)hdc, 0);
+
+        EndPaint(hwnd, &ps);
+
+        return CallWindowProc(g_oldLabelProc, hwnd, msg, 0, 0);
+
+
+        }
+    
+
+    default:
+        return CallWindowProc(g_oldLabelProc, hwnd, msg, wParam, lParam);
+    }
+}
+
+
 
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -895,6 +1219,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             wcsncpy_s(g_CurrentFilename, MAX_PATH, filename, _TRUNCATE);
+
+
+            
+
             OpenPopupWindow(hwnd, g_CurrentFilename);
             free(filename);
         } break;
@@ -982,6 +1310,9 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
             return 0;
 
+
+
+
         case WM_NOTIFY:
         {
             LPNMHDR pnmh = (LPNMHDR)lParam;
@@ -994,6 +1325,8 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         break;
 
         }
+
+
 
         case WM_KEYDOWN:
         {
@@ -1054,6 +1387,11 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
                 break;
             }
+
+            case IDC_SEARCH_BUTTON: {
+                FindFilesFromTab(g_CurrentPage);
+            } 
+
                 default: ;
             }
             break;
@@ -1339,6 +1677,81 @@ LRESULT CALLBACK FrameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+
+LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static HBRUSH hToolbarBrush = NULL;
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        hToolbarBrush = CreateSolidBrush(RGB(70, 73, 79)); 
+    }
+    
+
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC hdc = (HDC)wParam;
+        HWND hCtrl = (HWND)lParam;
+
+        if (hCtrl == hPageLabel || hCtrl == hSearchCountLabel)
+        {
+            SetTextColor(hdc, RGB(255, 255, 255));   // white text
+            SetBkColor(hdc, RGB(70, 73, 79));         // SAME as toolbar color
+
+            return (LRESULT)hToolbarBrush;         // Windows will erase background properly
+        }
+        
+        
+    }
+    
+
+
+    case WM_PAINT:
+    {
+        
+
+
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+
+        // Draw background
+        HBRUSH bg = CreateSolidBrush(RGB(71, 73, 79));
+        FillRect(hdc, &rect, bg);
+        DeleteObject(bg);
+
+        // Draw filename (center)
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        RECT centerRect = rect;
+        DrawText(hdc, current_opened_pdf, -1, &centerRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        // Draw page count (left)
+        //WCHAR pageText[64];
+        //swprintf_s(pageText, 64, L"%d / %d", current_pdf_page + 1, total_pages);
+        //RECT leftRect = { 5,0,rect.right / 2,rect.bottom };
+        //DrawTextW(hdc, pageText, -1, &leftRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_SIZE:
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+}
+
+
+
+
+
 void RegisterFrameClass(HINSTANCE hInstance)
 {
     static bool registered = false;
@@ -1371,6 +1784,36 @@ void RegisterPictureFrameClass(HINSTANCE hInstance)
     }
 }
 
+void RegisterToolbarClass(HINSTANCE hInstance) {
+    static bool registered = false;
+    if (!registered)
+    {
+        WNDCLASS wcChild = { 0 };
+        wcChild.lpfnWndProc = ToolbarProc;
+        wcChild.hInstance = g_hInstance;
+        wcChild.lpszClassName = L"TOOLBAR";
+        wcChild.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wcChild.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
+        RegisterClass(&wcChild);
+        registered = true;
+    }
+}
+
+void RegisterLabelClass(HINSTANCE hInstance) {
+    static bool registered = false;
+    if (!registered)
+    {
+        WNDCLASS wcChild = { 0 };
+        wcChild.lpfnWndProc = LabelProc;
+        wcChild.hInstance = g_hInstance;
+        wcChild.lpszClassName = L"LABELPROC";
+        wcChild.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wcChild.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
+        RegisterClass(&wcChild);
+        registered = true;
+    }
+}
+
 
 
 
@@ -1380,7 +1823,6 @@ void MakeWindowRounded(HWND hwnd, int width, int height, int radius) {
     GetWindowRect(hwnd, &rc);
     width = rc.right - rc.left;
     height = rc.bottom - rc.top;
-
     HRGN hRgn = CreateRoundRectRgn(0, 0, width+1, height+1, 20, 20);
     SetWindowRgn(hwnd, hRgn, TRUE);
 
@@ -1404,13 +1846,67 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
 
+        RECT client;
+        GetClientRect(hwnd, &client);
 
-        renderPDF(hdc, hwnd, pdf_ctx, doc, current_pdf_page);
+        int viewW = client.right;
+        int viewH = client.bottom;
+
+        if (!g_pdfBitmap) {
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        // clamp scroll
+        if (scrollY < 0) scrollY = 0;
+        if (scrollY > pdfHeight - viewH)
+            scrollY = pdfHeight - viewH;
+
+        if (pdfHeight < viewH)
+            scrollY = 0;
+
+        // 🚀 fast hardware blit
+        BitBlt(
+            hdc,
+            0, 0,
+            viewW, viewH,
+            g_pdfMemDC,
+            0, scrollY,
+            SRCCOPY
+        );
+
 
 
         EndPaint(hwnd, &ps);
         return 0;
     }
+
+    case WM_MOUSEWHEEL:
+    {
+        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+
+        scrollY -= delta / 2;   // adjust speed
+
+
+        int newPage = (scrollY + 10) / page_height + 1; // assuming pages stacked vertically
+        if (newPage != current_pdf_page && newPage <= total_pages) {
+            current_pdf_page = newPage;
+            WCHAR pageText[64];
+            swprintf_s(pageText, 64, L"%d / %d", current_pdf_page, total_pages);
+            SetWindowTextW(hPageLabel, pageText);  // updates instantly
+        }
+
+
+        InvalidateRect(g_pictureFrame, NULL, TRUE);
+
+
+        return 0;
+    }
+
+
+    case WM_ERASEBKGND:
+        return 1;
+    
 
     default:
         return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -1506,14 +2002,14 @@ HWND OpenSearchWindow(HWND hwndParent) {
    RegisterPictureFrameClass(GetModuleHandle(NULL));
 
 
-
+   
 
     HWND pictureFrame = CreateWindowEx(
             0,
             L"PDFChild",
             L"PDF Viewer",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            800, 50, 600, 725,
+            800, 50, 650, 755,
             hwnd,
             NULL,
             g_hInstance,
@@ -1526,6 +2022,54 @@ HWND OpenSearchWindow(HWND hwndParent) {
     }
 
     g_pictureFrame = pictureFrame;
+
+    RegisterToolbarClass(GetModuleHandle(NULL));
+
+
+    HWND pictureFrameToolbar = CreateWindowEx(
+        0,
+        L"TOOLBAR",
+        NULL,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        800, 10, 650, 45,
+        hwnd,
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+    HWND hToolbar = pictureFrameToolbar;
+
+
+    
+    hPageLabel = CreateWindowW(
+        L"STATIC",         // class
+        L"1 / 1",          // initial text
+        WS_CHILD | WS_VISIBLE,
+        5, 12, 50, 18,     // position and size
+        hToolbar,          // parent window
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+
+    hSearchCountLabel = CreateWindowW(
+        L"STATIC",
+        L"1 / 1",
+        WS_CHILD | WS_VISIBLE,
+        610, 12, 50, 18,
+        hToolbar,
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+
+
+
+    
+
 
 
 
@@ -1547,6 +2091,9 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
     LoadTabsFromIni(hSearchTab, INI_SEARCH);
     SetPage(0, INI_SEARCH, frame);
+
+    RenderPageToCache(g_pictureFrame);
+    InvalidateRect(g_pictureFrame, NULL, TRUE);
 
 
 
@@ -1603,6 +2150,9 @@ int WINAPI WinMain(
     }
 
     wchar_t wpath[] = L"C:\\Users\\Macreal\\Downloads\\placeholder.pdf";
+
+    current_opened_pdf = PathFindFileNameW(wpath); 
+
     char utf8_path[MAX_PATH * 3];
     int len = WideCharToMultiByte(CP_UTF8, 0, wpath, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
     if (len == 0)
@@ -1623,7 +2173,7 @@ int WINAPI WinMain(
         return 1;
     }
 
-    int total_pages = fz_count_pages(pdf_ctx, doc);
+    total_pages = fz_count_pages(pdf_ctx, doc);
 
     MessageBox(NULL, L"PDF successfully loaded!", L"Debug", MB_OK);
 
