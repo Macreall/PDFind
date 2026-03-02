@@ -8,8 +8,8 @@
 
 
 
-struct fz_context *pdf_ctx = NULL;
-struct fz_document *doc = NULL;
+struct fz_context* pdf_ctx = NULL;
+struct fz_document* doc = NULL;
 int current_pdf_page = 0;
 HWND g_pdfFrame = NULL;
 HWND g_pictureFrame = NULL;
@@ -45,7 +45,9 @@ WNDPROC g_oldLabelProc = NULL;
 
 
 
+
 #define MAX_RESULTS 256
+
 
 typedef struct {
     wchar_t fullPath[MAX_PATH];
@@ -56,6 +58,9 @@ typedef struct {
     int count;
 } FOUND_LIST;
 
+int g_CurrentResultIndex = 0;
+
+FOUND_LIST* foundResults;
 
 
 
@@ -68,6 +73,16 @@ typedef struct {
 
 
 
+
+
+void ClearSearchResults()
+{
+    if (foundResults)
+    {
+        free(foundResults);
+        foundResults = NULL;
+    }
+}
 
 
 
@@ -105,7 +120,7 @@ HWND hPopupWnd = NULL;
 HWND hButton = NULL;
 
 HWND hSearchTab = NULL;
-HWND hSearchWnd= NULL;
+HWND hSearchWnd = NULL;
 
 HWND frame = NULL;
 
@@ -175,6 +190,7 @@ typedef struct {
     wchar_t iniSection[64];
     FIELD_DATA fields[16];
     u_int fieldCount;
+    HWND hPage; 
 
     HWND hButton;
     LPCWSTR iniPath;
@@ -207,8 +223,9 @@ LPCWSTR INI_SEARCH = L"C:\\watchFolder\\search_settings.ini";
 HWND fieldLabels[MAX_FIELDS];
 HWND fieldControls[MAX_FIELDS];
 int activeFieldCount = 0;
-TAB_DATA Tabs[MAX_TABS];
 
+TAB_DATA SearchTabs[MAX_TABS];
+TAB_DATA SaveTabs[MAX_TABS];
 
 
 int running = 1;
@@ -217,14 +234,24 @@ int g_CurrentPage = 0;
 WCHAR g_CurrentFilename[MAX_PATH];
 u_int PAGE_COUNT = 0;
 
+u_int SearchTabCount;
+u_int SaveTabCount;
+
 
 void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath);
 HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text);
 HWND OpenSearchWindow(HWND hwndParent);
 LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD_VALUE* fields, int fieldCount);
 
 
+
+BOOL CALLBACK DestroyChildProc(HWND hwnd, LPARAM lParam)
+{
+    DestroyWindow(hwnd);
+    return TRUE; 
+}
 
 void OpenSaveSettings(HWND hwnd) {
     ShellExecute(
@@ -250,9 +277,9 @@ void OpenSearchSettings(HWND hwnd) {
 
 
 
-void ClearTabFields(int tabIndex)
+void ClearTabFields(int tabIndex, TAB_DATA* tabs)
 {
-    TAB_DATA* tab = &Tabs[tabIndex];
+    TAB_DATA* tab = &tabs[tabIndex];
     for (int f = 0; f < tab->fieldCount; f++)
     {
         FIELD_DATA* field = &tab->fields[f];
@@ -291,8 +318,8 @@ void RenderPageToCache(HWND hwnd)
     HDC hdc = GetDC(hwnd);
 
     pdfWidth = PAGE_W;
-    pdfHeight = 0; 
-    int pageHeights[256]; 
+    pdfHeight = 0;
+    int pageHeights[256];
     for (int i = 0; i < total_pages; i++) {
         fz_page* page = fz_load_page(pdf_ctx, doc, i);
         fz_rect bounds = fz_bound_page(pdf_ctx, page);
@@ -320,7 +347,7 @@ void RenderPageToCache(HWND hwnd)
         int pageW = ib.x1 - ib.x0;
         int pageH = ib.y1 - ib.y0;
 
-        pageHeights[i] = pageH + PAGE_GAP; 
+        pageHeights[i] = pageH + PAGE_GAP;
 
 
         RECT pr = { 0, y_offset, PAGE_W, y_offset + pageH };
@@ -346,7 +373,7 @@ void RenderPageToCache(HWND hwnd)
         BITMAPINFO bmi = { 0 };
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bmi.bmiHeader.biWidth = fz_pixmap_width(pdf_ctx, pix);
-        bmi.bmiHeader.biHeight = -fz_pixmap_height(pdf_ctx, pix); 
+        bmi.bmiHeader.biHeight = -fz_pixmap_height(pdf_ctx, pix);
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -433,7 +460,7 @@ void LoadNewPDF(const wchar_t* newPath)
 
     PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
 
-    if (g_toolbar) 
+    if (g_toolbar)
         InvalidateRect(g_toolbar, NULL, TRUE);
 }
 
@@ -476,20 +503,34 @@ void AddFound(FOUND_LIST* list, const wchar_t* path)
 }
 
 void SearchFolder(
-    const wchar_t* folder,
+    const wchar_t* folderTemplate,
     TAB_DATA* tab,
     FOUND_LIST* results
 )
 {
+    FIELD_VALUE fieldValues[64];
+    int fieldCount = 0;
+
+    for (int i = 0; i < tab->fieldCount; i++) {
+        FIELD_DATA* f = &tab->fields[i];
+        if (!f->hControl) continue;
+
+        wcscpy_s(fieldValues[fieldCount].label, 64, f->label);
+        GetWindowTextW(f->hControl, fieldValues[fieldCount].value, 256);
+        fieldCount++;
+    }
+
+    wchar_t expandedFolder[512];
+    ExpandTemplate(folderTemplate, expandedFolder, 512, fieldValues, fieldCount);
+
     wchar_t pattern[MAX_PATH];
-    swprintf_s(pattern, MAX_PATH, L"%s\\*", folder);
-
-
+    swprintf_s(pattern, MAX_PATH, L"%s\\*", expandedFolder);
 
     WIN32_FIND_DATAW fd;
     HANDLE hFind = FindFirstFileW(pattern, &fd);
+
     if (hFind == INVALID_HANDLE_VALUE) {
-        MessageBox(hSearchWnd, L"Invalid handle", L"Error", MB_OK);
+        MessageBox(hSearchWnd, expandedFolder, L"Folder not found", MB_OK);
         return;
     }
 
@@ -508,10 +549,10 @@ void SearchFolder(
             if (FilenameContains(fd.cFileName, text)) {
 
                 wchar_t fullPath[MAX_PATH];
-                swprintf_s(fullPath, MAX_PATH, L"%s\\%s", folder, fd.cFileName);
+                swprintf_s(fullPath, MAX_PATH, L"%s\\%s", expandedFolder, fd.cFileName);
 
                 AddFound(results, fullPath);
-                break; 
+                break;
             }
         }
 
@@ -520,9 +561,11 @@ void SearchFolder(
     FindClose(hFind);
 }
 
-void SearchFromIniPaths(int currentPage, FOUND_LIST* results)
+
+
+void SearchFromIniPaths(int currentPage, FOUND_LIST* results, TAB_DATA* tabs)
 {
-    TAB_DATA* tab = &Tabs[currentPage];
+    TAB_DATA* tab = &tabs[currentPage];
 
     for (int p = 0; p < 10; p++) {
 
@@ -547,30 +590,38 @@ void SearchFromIniPaths(int currentPage, FOUND_LIST* results)
 }
 
 
-void FindFilesFromTab(int currentPage)
+void FindFilesFromTab(int currentPage, TAB_DATA* tabs)
 {
 
+    ClearSearchResults();
 
-    FOUND_LIST* results = calloc(1, sizeof(FOUND_LIST));
-    if (!results) return;
+    foundResults = calloc(1, sizeof(FOUND_LIST));
+    if (!foundResults) return;
 
-    SearchFromIniPaths(currentPage, results);
+    SearchFromIniPaths(currentPage, foundResults, tabs);
 
 
 
-    if (results->count == 0) {
+    if (foundResults->count == 0) {
         MessageBoxW(NULL, L"No files found", L"Search", MB_OK | MB_ICONWARNING);
+        ClearSearchResults();
         return;
     }
 
-    LoadNewPDF(results->items[0].fullPath);
 
-    for (int i = 1; i < results->count; i++) {
-        OutputDebugStringW(results->items[i].fullPath);
+    g_CurrentResultIndex = 0;
+
+    LoadNewPDF(foundResults->items[0].fullPath);
+    
+
+
+
+
+    for (int i = 1; i < foundResults->count; i++) {
+        OutputDebugStringW(foundResults->items[i].fullPath);
         OutputDebugStringW(L"\n");
     }
 
-    free(results);
 }
 
 
@@ -626,13 +677,13 @@ void SaveLastPath(LPCWSTR src, LPCWSTR dest, LPCWSTR iniPath)
 
 void LoadLastPath(wchar_t* src, wchar_t* dest, DWORD size, LPCWSTR iniPath)
 {
-    GetPrivateProfileStringW(L"Undo", L"LastSrc",  L"", src,  size, iniPath);
+    GetPrivateProfileStringW(L"Undo", L"LastSrc", L"", src, size, iniPath);
     GetPrivateProfileStringW(L"Undo", L"LastDest", L"", dest, size, iniPath);
 }
 
 void RemoveLastPath(LPCWSTR iniPath) {
-    WritePrivateProfileStringW(L"Undo",L"LastSrc", NULL, iniPath);
-    WritePrivateProfileStringW(L"Undo",L"LastDest", NULL, iniPath);
+    WritePrivateProfileStringW(L"Undo", L"LastSrc", NULL, iniPath);
+    WritePrivateProfileStringW(L"Undo", L"LastDest", NULL, iniPath);
 
 }
 
@@ -645,9 +696,9 @@ void DestroyActiveFields(void) {
     activeFieldCount = 0;
 }
 
-FIELD_DATA* FindFieldByHwnd(HWND hCtrl) {
-    for (int t = 0; t < PAGE_COUNT; t++) {
-        TAB_DATA* tab = &Tabs[t];
+FIELD_DATA* FindFieldByHwnd(HWND hCtrl, TAB_DATA* tabs, int tabCount) {
+    for (int t = 0; t < tabCount; t++) {
+        TAB_DATA* tab = &tabs[t];
         for (int f = 0; f < tab->fieldCount; f++) {
             if (tab->fields[f].hControl == hCtrl)
                 return &tab->fields[f];
@@ -661,11 +712,11 @@ static bool IsInvalidFilenameChar(wchar_t c)
     if (c < 32) return true;
 
     switch (c) {
-        case L'<': case L'>': case L':':
-        case L'"': case L'/': case L'\\':
-        case L'|': case L'?': case L'*':
-            return true;
-        default: ;
+    case L'<': case L'>': case L':':
+    case L'"': case L'/': case L'\\':
+    case L'|': case L'?': case L'*':
+        return true;
+    default:;
     }
     return false;
 }
@@ -709,7 +760,7 @@ bool LoadButtonData(const wchar_t* tabSection, BUTTON_DATA* b, LPCWSTR iniPath)
     if (b->x < 0 || b->y < 0)
         return false;
 
-    b->width  = GetPrivateProfileIntW(tabSection, L"Button.Width", 80, iniPath);
+    b->width = GetPrivateProfileIntW(tabSection, L"Button.Width", 80, iniPath);
     b->height = GetPrivateProfileIntW(tabSection, L"Button.Height", 25, iniPath);
 
     GetPrivateProfileStringW(
@@ -766,9 +817,9 @@ void PopulateControlData(const FIELD_DATA* f, LPCWSTR iniPath)
 
 
 
-void LoadTabFields(int tabIndex, const wchar_t* section, LPCWSTR iniPath)
+void LoadTabFields(int tabIndex, const wchar_t* section, LPCWSTR iniPath, TAB_DATA* tabs)
 {
-    TAB_DATA* tab = &Tabs[tabIndex];
+    TAB_DATA* tab = &tabs[tabIndex];
 
     tab->fieldCount =
         GetPrivateProfileIntW(section, L"FieldCount", 0, iniPath);
@@ -837,30 +888,32 @@ void LoadTabFields(int tabIndex, const wchar_t* section, LPCWSTR iniPath)
 
 
 
-void LoadTabsFromIni(HWND hTab, LPCWSTR iniPath)
+void LoadTabsFromIni(HWND hTab, LPCWSTR iniPath, TAB_DATA* tabs, int* tabCount)
 {
     TabCtrl_DeleteAllItems(hTab);
 
-    PAGE_COUNT = LoadTabCount(iniPath);
+    *tabCount = LoadTabCount(iniPath);
 
-    for (int i = 0; i < PAGE_COUNT; i++)
+
+
+    for (int i = 0; i < *tabCount; i++)
     {
         wchar_t section[16];
         swprintf_s(section, 16, L"Tab%d", i);
 
-        swprintf_s(Tabs[i].iniSection, 64, L"Tab%d", i);
+        swprintf_s(tabs[i].iniSection, 64, L"Tab%d", i);
 
 
         GetPrivateProfileStringW(section, L"Name", L"Unnamed",
-            Tabs[i].name, 64, iniPath);
+            tabs[i].name, 64, iniPath);
 
 
 
-        LoadTabFields(i, section, iniPath);
+        LoadTabFields(i, section, iniPath, tabs);
 
-        TCITEM tie = {0};
+        TCITEM tie = { 0 };
         tie.mask = TCIF_TEXT;
-        tie.pszText = Tabs[i].name;
+        tie.pszText = tabs[i].name;
         TabCtrl_InsertItem(hTab, i, &tie);
     }
 }
@@ -874,7 +927,7 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath)
     DestroyActiveFields();
 
     int y = 50;
-    int xCtrl  = 50;
+    int xCtrl = 50;
 
     int widthCtrl = 150;
     int heightCtrl = 20;
@@ -899,7 +952,7 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath)
         int drawX = baseX + ((f->x != -1) ? f->x : xCtrl);
         int drawY = baseY + ((f->y != -1) ? f->y : y);
 
-        int drawWidth  = (f->width != -1) ? f->width : widthCtrl;
+        int drawWidth = (f->width != -1) ? f->width : widthCtrl;
         int drawHeight = (f->height != -1) ? f->height : heightCtrl;
 
 
@@ -922,40 +975,40 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath)
 
         switch (f->controlType)
         {
-            case FIELD_EDIT:
-                f->hControl = CreateWindowExW(
-                    WS_EX_CLIENTEDGE,
-                    L"EDIT",
-                    L"",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                    drawX, drawY,
-                    drawWidth, drawHeight,
-                    parent,
-                    NULL,
-                    g_hInstance,
-                    NULL
-                );
+        case FIELD_EDIT:
+            f->hControl = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                drawX, drawY,
+                drawWidth, drawHeight,
+                parent,
+                NULL,
+                g_hInstance,
+                NULL
+            );
 
 
 
-                y += 50;
-                break;
+            y += 50;
+            break;
 
-            case FIELD_COMBO:
-                f->hControl = CreateWindowW(
-                    WC_COMBOBOX,
-                    L"",
-                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-                    drawX, drawY,
-                    drawWidth, drawHeight,
-                    parent,
-                    NULL,
-                    g_hInstance,
-                    NULL
-                );
-                y += 50;
-                break;
-            default: ;
+        case FIELD_COMBO:
+            f->hControl = CreateWindowW(
+                WC_COMBOBOX,
+                L"",
+                WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
+                drawX, drawY,
+                drawWidth, drawHeight,
+                parent,
+                NULL,
+                g_hInstance,
+                NULL
+            );
+            y += 50;
+            break;
+        default:;
         }
 
 
@@ -973,8 +1026,8 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath)
 }
 
 
-void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, UINT btnID) {
-    TAB_DATA* tab = &Tabs[pageIndex];
+void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, UINT btnID, TAB_DATA* tabs) {
+    TAB_DATA* tab = &tabs[pageIndex];
 
     if (tab->hButton && IsWindow(tab->hButton)) {
         DestroyWindow(tab->hButton);
@@ -999,12 +1052,12 @@ void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, UINT btnID) {
         drawX, drawY,
         btn.width, btn.height,
         parent,
-        (HMENU)(INT_PTR)btnID, 
+        (HMENU)(INT_PTR)btnID,
         g_hInstance,
         NULL
     );
 
-    tab->iniPath = iniPath; 
+    tab->iniPath = iniPath;
 }
 
 
@@ -1081,9 +1134,9 @@ void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD
 
 
 void SaveFile(int currentPage) {
-    if (currentPage < 0 || currentPage >= PAGE_COUNT) return;
+    if (currentPage < 0 || currentPage >= SaveTabCount) return;
 
-    TAB_DATA* tab = &Tabs[currentPage];
+    TAB_DATA* tab = &SaveTabs[currentPage];
 
     for (int i = 0; i < tab->fieldCount; i++) {
         FIELD_DATA* f = &tab->fields[i];
@@ -1092,11 +1145,11 @@ void SaveFile(int currentPage) {
             if (sel != CB_ERR) {
                 SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
 
-                int fieldIndex = (int)(f - &Tabs[g_CurrentPage].fields[0]);
+                int fieldIndex = (int)(f - &SaveTabs[g_CurrentPage].fields[0]);
                 wchar_t key[64];
                 swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
                 WritePrivateProfileStringW(
-                    Tabs[g_CurrentPage].iniSection,
+                    SaveTabs[g_CurrentPage].iniSection,
                     key,
                     f->lastComboValue,
                     INI_SAVE
@@ -1180,10 +1233,10 @@ void SaveFile(int currentPage) {
 
 
 bool IsFileSendReady(int currentPage) {
-    if (currentPage < 0 || currentPage >= PAGE_COUNT)
+    if (currentPage < 0 || currentPage >= SaveTabCount)
         return false;
 
-    TAB_DATA* tab = &Tabs[currentPage];
+    TAB_DATA* tab = &SaveTabs[currentPage];
 
     for (int i = 0; i < tab->fieldCount; i++) {
         FIELD_DATA* f = &tab->fields[i];
@@ -1191,23 +1244,23 @@ bool IsFileSendReady(int currentPage) {
             continue;
 
         switch (f->controlType) {
-            case FIELD_EDIT: {
-                wchar_t text[256];
-                GetWindowText(f->hControl, text, 256);
-                if (wcslen(text) == 0)
-                    return false;
-                break;
-            }
+        case FIELD_EDIT: {
+            wchar_t text[256];
+            GetWindowText(f->hControl, text, 256);
+            if (wcslen(text) == 0)
+                return false;
+            break;
+        }
 
-            case FIELD_COMBO: {
-                int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
-                if (sel == CB_ERR)
-                    return false;
-                break;
-            }
+        case FIELD_COMBO: {
+            int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
+            if (sel == CB_ERR)
+                return false;
+            break;
+        }
 
 
-            default: break;
+        default: break;
         }
     }
 
@@ -1215,34 +1268,36 @@ bool IsFileSendReady(int currentPage) {
 }
 
 
-void SetPage(int newPage, LPCWSTR iniPath, HWND hwndParent)
+
+
+void SetPage(
+    HWND hTab,
+    HWND hwndParent,
+    TAB_DATA* tabs,
+    int pageCount,
+    int newPage,
+    LPCWSTR iniPath,
+    int buttonId
+)
 {
-    if (newPage < 0 || newPage >= PAGE_COUNT)
+    if (newPage < 0 || newPage >= pageCount)
         return;
 
-    g_CurrentPage = newPage;
+    TabCtrl_SetCurSel(hTab, newPage);
 
-    if (hPopupTab && IsWindow(hPopupTab)) {
-        TabCtrl_SetCurSel(hPopupTab, newPage);
-        CreateFieldsFromTab(hPopupWnd, &Tabs[newPage], INI_SAVE);
-        CreateButtons(hPopupWnd, newPage, INI_SAVE, IDC_SAVE_BUTTON);
-    }
+    DestroyActiveFields();
 
-    else if (hSearchTab && IsWindow(hSearchTab)) {
-        TabCtrl_SetCurSel(hSearchTab, newPage);
-        CreateFieldsFromTab(frame, &Tabs[newPage], INI_SEARCH);
-        CreateButtons(hwndParent, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
-    }
+    CreateFieldsFromTab(hwndParent, &tabs[newPage], iniPath);
+    CreateButtons(hwndParent, newPage, iniPath, buttonId, tabs);
 
-
-
-    TAB_DATA* tab = &Tabs[g_CurrentPage];
-
+    TAB_DATA* tab = &tabs[newPage];
 
     for (int i = 0; i < tab->fieldCount; i++)
         PopulateControlData(&tab->fields[i], iniPath);
-
 }
+
+
+
 
 
 
@@ -1289,7 +1344,7 @@ DWORD WINAPI WatchFolder(LPVOID lpParam) {
                 FILE_NOTIFY_INFORMATION* fni = (FILE_NOTIFY_INFORMATION*)(buffer + offset);
 
                 unsigned long long const len = fni->FileNameLength / sizeof(WCHAR);
-                WCHAR filename[256] = {0};
+                WCHAR filename[256] = { 0 };
                 wcsncpy_s(filename, 256, fni->FileName, len);
                 filename[len] = 0;
 
@@ -1315,7 +1370,7 @@ LRESULT CALLBACK LabelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg)
     {
     case WM_PAINT:
-        {
+    {
 
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -1330,8 +1385,8 @@ LRESULT CALLBACK LabelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return CallWindowProc(g_oldLabelProc, hwnd, msg, 0, 0);
 
 
-        }
-    
+    }
+
 
     default:
         return CallWindowProc(g_oldLabelProc, hwnd, msg, wParam, lParam);
@@ -1344,423 +1399,475 @@ LRESULT CALLBACK LabelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
 
-        case WM_CLOSE:
-            DestroyWindow(hwnd);
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        break;
+
+    case WM_APP + 1: {
+
+        if (g_pdfFrame && IsWindow(g_pdfFrame))
+        {
+            MessageBox(hwnd,
+                L"Search window is open.\nClose it before continuing?",
+                L"Confirm",
+                MB_OK | MB_ICONERROR | MB_TOPMOST);
+
+            SetForegroundWindow(hSearchWnd);
+            return 0;
+        }
+
+
+        WCHAR* filename = (WCHAR*)lParam;
+
+        if (!filename)
             break;
 
-        case WM_APP + 1: {
-            WCHAR* filename = (WCHAR*)lParam;
+        size_t len = wcslen(filename);
 
-            if (!filename)
-                break;
-
-            size_t len = wcslen(filename);
-
-            if (len < 4 || _wcsicmp(filename + len - 4, L".pdf") != 0) {
-                free(filename);
-                break;
-            }
-
-            wcsncpy_s(g_CurrentFilename, MAX_PATH, filename, _TRUNCATE);
-
-
-            
-
-            OpenPopupWindow(hwnd, g_CurrentFilename);
+        if (len < 4 || _wcsicmp(filename + len - 4, L".pdf") != 0) {
             free(filename);
-        } break;
+            break;
+        }
 
-        case WM_TRAYICON:
-            if (lParam == WM_LBUTTONDOWN) {
-                HMENU menu = CreatePopupMenu();
+        wcsncpy_s(g_CurrentFilename, MAX_PATH, filename, _TRUNCATE);
 
-                AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH, L"Search");
-                AppendMenu(menu, MF_STRING, ID_TRAY_UNDO, L"Undo");
-                AppendMenu(menu, MF_SEPARATOR, 0, NULL);
-                AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH_SETTINGS, L"Search Settings");
-                AppendMenu(menu, MF_STRING, ID_TRAY_SAVE_SETTINGS, L"Save Settings");
-                AppendMenu(menu, MF_SEPARATOR, 0, NULL);
-                AppendMenu(menu, MF_STRING, ID_TRAY_EXIT, L"Quit");
+        OpenPopupWindow(hwnd, g_CurrentFilename);
+        free(filename);
+    } break;
 
-                POINT p;
-                GetCursorPos(&p);
-                SetForegroundWindow(hwnd);
-                TrackPopupMenu(menu, TPM_RIGHTBUTTON, p.x, p.y, 0, hwnd, NULL);
-                DestroyMenu(menu);
+    case WM_TRAYICON:
+        if (lParam == WM_LBUTTONDOWN) {
+            HMENU menu = CreatePopupMenu();
+
+            AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH, L"Search");
+            AppendMenu(menu, MF_STRING, ID_TRAY_UNDO, L"Undo");
+            AppendMenu(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH_SETTINGS, L"Search Settings");
+            AppendMenu(menu, MF_STRING, ID_TRAY_SAVE_SETTINGS, L"Save Settings");
+            AppendMenu(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenu(menu, MF_STRING, ID_TRAY_EXIT, L"Quit");
+
+            POINT p;
+            GetCursorPos(&p);
+            SetForegroundWindow(hwnd);
+            TrackPopupMenu(menu, TPM_RIGHTBUTTON, p.x, p.y, 0, hwnd, NULL);
+            DestroyMenu(menu);
+        }
+        break;
+
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case ID_TRAY_EXIT:
+            int result = MessageBox(
+                hwnd,
+                L"Are you sure you want to exit?",
+                L"Confirm Exit",
+                MB_YESNO | MB_ICONQUESTION
+            );
+
+            if (result == IDYES)
+            {
+                DestroyWindow(hwnd);
+                PostQuitMessage(0);
             }
+            return 0;
+        case ID_TRAY_SAVE_SETTINGS:
+            OpenSaveSettings(hwnd);
             break;
+        case ID_TRAY_SEARCH_SETTINGS:
+            OpenSearchSettings(hwnd);
+            break;
+        case ID_TRAY_SEARCH:
 
+            if (hPopupWnd && IsWindow(hPopupWnd))
+            {
+                MessageBox(
+                    hwnd,
+                    L"Save window is currently open.\nClose it before opening Search.",
+                    L"Operation Not Allowed",
+                    MB_OK | MB_ICONERROR | MB_TOPMOST
+                );
 
-        case WM_COMMAND:
-            switch (LOWORD(wParam)) {
-                case ID_TRAY_EXIT:
-                    int result = MessageBox(
-                        hwnd,
-                        L"Are you sure you want to exit?", 
-                        L"Confirm Exit",
-                        MB_YESNO | MB_ICONQUESTION
-                    );
+                SetForegroundWindow(hPopupWnd);
+                return 0;
 
-                    if (result == IDYES)
-                    {
-                        DestroyWindow(hwnd);
-                        PostQuitMessage(0);
-                    }
-                    return 0;
-            case ID_TRAY_SAVE_SETTINGS:
-                    OpenSaveSettings(hwnd);
-                    break;
-            case ID_TRAY_SEARCH_SETTINGS:
-                    OpenSearchSettings(hwnd);
-                    break;
-            case ID_TRAY_SEARCH:
-                    OpenSearchWindow(hwnd);
-                    break;
-            case ID_TRAY_UNDO:
-
-                    wchar_t lastSrc[MAX_PATH];
-                    wchar_t lastDest[MAX_PATH];
-
-                    LoadLastPath(lastSrc, lastDest, MAX_PATH, INI_SAVE);
-
-                    if (lastSrc[0] && lastDest[0]) {
-                        MoveFileExW(lastDest, lastSrc, MOVEFILE_REPLACE_EXISTING);
-                    }
-
-                    else {
-                        MessageBox(hwnd, L"No items to undo.", L"Error", MB_OK);
-                    }
-
-
-
-                    break;
-
-
-            default: ;
             }
+
+            OpenSearchWindow(hwnd);
+            break;
+        case ID_TRAY_UNDO:
+
+            wchar_t lastSrc[MAX_PATH];
+            wchar_t lastDest[MAX_PATH];
+
+            LoadLastPath(lastSrc, lastDest, MAX_PATH, INI_SAVE);
+
+            if (lastSrc[0] && lastDest[0]) {
+                MoveFileExW(lastDest, lastSrc, MOVEFILE_REPLACE_EXISTING);
+            }
+
+            else {
+                MessageBox(hwnd, L"No items to undo.", L"Error", MB_OK);
+            }
+
+
+
             break;
 
 
-        case WM_DESTROY:
-            RemoveLastPath(INI_SAVE);
-            Shell_NotifyIcon(NIM_DELETE, &nid);
-            DestroyIcon(nid.hIcon);
-            PostQuitMessage(0);
-            break;
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+        default:;
+        }
+        break;
+
+
+    case WM_DESTROY:
+        RemoveLastPath(INI_SAVE);
+        Shell_NotifyIcon(NIM_DELETE, &nid);
+        DestroyIcon(nid.hIcon);
+        PostQuitMessage(0);
+        break;
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
 
     }
     return 0;
 }
 
 LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch(msg) {
-        case WM_CLOSE:
+    switch (msg) {
+    case WM_CLOSE:
 
-            if (doc) { fz_drop_document(pdf_ctx, doc); doc = NULL; }
-            if (g_pdfBitmap) { DeleteObject(g_pdfBitmap); g_pdfBitmap = NULL; }
-            if (g_pdfMemDC) { DeleteDC(g_pdfMemDC); g_pdfMemDC = NULL; }
+        ClearSearchResults();
 
-            scrollY = 0;
-            maxScroll = 0;
-            pdfWidth = 0;
-            pdfHeight = 0;
-            total_pages = 0;
-            current_pdf_page = 0;
+        if (doc) { fz_drop_document(pdf_ctx, doc); doc = NULL; }
+        if (g_pdfBitmap) { DeleteObject(g_pdfBitmap); g_pdfBitmap = NULL; }
+        if (g_pdfMemDC) { DeleteDC(g_pdfMemDC); g_pdfMemDC = NULL; }
 
-            current_opened_pdf = L"No PDF loaded";
+        scrollY = 0;
+        maxScroll = 0;
+        pdfWidth = 0;
+        pdfHeight = 0;
+        total_pages = 0;
+        current_pdf_page = 0;
 
-            if (g_toolbar) InvalidateRect(g_toolbar, NULL, TRUE);
-            if (g_pictureFrame) InvalidateRect(g_pictureFrame, NULL, TRUE);
+        current_opened_pdf = L"No PDF loaded";
 
-            DestroyWindow(hwnd);
-            return 0;
-        case WM_DESTROY:
-            DestroyActiveFields();
+        if (g_toolbar) InvalidateRect(g_toolbar, NULL, TRUE);
+        if (g_pictureFrame) InvalidateRect(g_pictureFrame, NULL, TRUE);
 
-            current_opened_pdf = NULL;
-            doc = NULL;
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        DestroyActiveFields();
 
-            g_pdfFrame = NULL;
-            g_pictureFrame = NULL;
-            hSearchTab = NULL;
-            frame = NULL;
+        current_opened_pdf = NULL;
+        doc = NULL;
 
-
-            return 0;
-
+        g_pdfFrame = NULL;
+        g_pictureFrame = NULL;
+        hSearchTab = NULL;
+        frame = NULL;
 
 
+        return 0;
 
-        case WM_NOTIFY:
+
+
+
+    case WM_NOTIFY:
+    {
+        LPNMHDR pnmh = (LPNMHDR)lParam;
+
+        if (pnmh->hwndFrom == hSearchTab && pnmh->code == TCN_SELCHANGE)
         {
-            LPNMHDR pnmh = (LPNMHDR)lParam;
+            ClearSearchResults();
 
-            if (pnmh->hwndFrom == hSearchTab && pnmh->code == TCN_SELCHANGE)
-            {
-                int newPage = TabCtrl_GetCurSel(hSearchTab);
-                SetPage(newPage, INI_SEARCH, hwnd);
-            }
+            int newPage = TabCtrl_GetCurSel(hSearchTab);
+            SetPage(hSearchTab, frame, SearchTabs, SearchTabCount, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
+        }
         break;
 
+    }
+
+
+
+    case WM_KEYDOWN:
+    {
+        if (wParam == VK_TAB)
+        {
+            HWND current = GetFocus();
+
+            HWND root = GetAncestor(current, GA_ROOT);
+            BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
+
+
+            HWND parent = GetParent(current);
+            HWND next = GetNextDlgTabItem(parent, current, backwards);
+
+            if (next)
+                SetFocus(next);
+
+            return 0;
+        }
+
+        if (wParam == VK_ESCAPE)
+        {
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
         }
 
 
-
-        case WM_KEYDOWN:
+        if (wParam == VK_RETURN)
         {
-            if (wParam == VK_TAB)
+            HWND focused = GetFocus();
+
+            int activeTab = TabCtrl_GetCurSel(hSearchTab);
+            TAB_DATA* tab = &SearchTabs[activeTab];
+
+            for (int i = 0; i < tab->fieldCount; i++)
             {
-                HWND current = GetFocus();
+                FIELD_DATA* field = &tab->fields[i];
+                if (field->controlType == FIELD_EDIT && field->hControl == focused)
+                {
+                    ClearSearchResults();
 
-                HWND root = GetAncestor(current, GA_ROOT);
-                BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
+
+                    SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_SEARCH_BUTTON, BN_CLICKED), (LPARAM)GetDlgItem(hwnd, IDC_SEARCH_BUTTON));
+                    return 0;
+                }
+            }
+        }
+        break;
+    }
+
+    case WM_COMMAND:
+    {
+        int id = LOWORD(wParam);
+        int code = HIWORD(wParam);
+
+        switch (id)
+        {
+        case IDC_SEARCH_BUTTON:
+        {
+            if (id == IDC_SEARCH_BUTTON)
+            {
+
+                ClearSearchResults();
+
+             
 
 
-                HWND parent = GetParent(current);
-                HWND next = GetNextDlgTabItem(parent, current, backwards);
-                
-                if (next)
-                    SetFocus(next);
+                int activeTab = TabCtrl_GetCurSel(hSearchTab);
+
+                FindFilesFromTab(activeTab, SearchTabs);
+
+                ClearTabFields(activeTab, SearchTabs);
+
+
+                WCHAR searchCountText[64];
+                swprintf_s(searchCountText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+                SetWindowTextW(hSearchCountLabel, searchCountText);
+
+                WCHAR pageText[64];
+                swprintf_s(pageText, 64, L"Page   %d / %d", current_pdf_page + 1, total_pages);
+                SetWindowTextW(hPageLabel, pageText);
+
+
+
+                FIELD_DATA* field = &SearchTabs[activeTab].fields[0];
+                if (field->controlType == FIELD_EDIT && field->hControl)
+                {
+                    SetFocus(field->hControl);
+                }
 
                 return 0;
             }
-
-            if (wParam == VK_ESCAPE)
-            {
-                PostMessage(hwnd, WM_CLOSE, 0, 0); 
-            }
-
-
-            if (wParam == VK_RETURN)
-            {
-                HWND focused = GetFocus();
-
-                int activeTab = TabCtrl_GetCurSel(hSearchTab);
-                TAB_DATA* tab = &Tabs[activeTab];
-
-                for (int i = 0; i < tab->fieldCount; i++)
-                {
-                    FIELD_DATA* field = &tab->fields[i];
-                    if (field->controlType == FIELD_EDIT && field->hControl == focused)
-                    {
-                        SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_SEARCH_BUTTON, BN_CLICKED), (LPARAM)GetDlgItem(hwnd, IDC_SEARCH_BUTTON));
-                        return 0;
-                    }
-                }
-            }
-        }
-
-        case WM_COMMAND:
-        {
-            int id = LOWORD(wParam);
-            int code = HIWORD(wParam);
-
-            switch (id)
-            {
-            case IDC_SEARCH_BUTTON:
-            {
-                if (id == IDC_SEARCH_BUTTON)
-                {
-
-                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
-
-                    FindFilesFromTab(g_CurrentPage);
-
-                    ClearTabFields(activeTab);
-
-                    FIELD_DATA* field = &Tabs[activeTab].fields[0]; 
-                    if (field->controlType == FIELD_EDIT && field->hControl)
-                    {
-                        SetFocus(field->hControl);
-                    }
-
-                    return 0;
-                }
-                break;
-            }
-
-            case CBN_SELCHANGE:
-            {
-                FIELD_DATA* f = FindFieldByHwnd((HWND)lParam);
-                if (f && f->controlType == FIELD_COMBO && !f->skipRecent)
-                {
-                    int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
-                    if (sel != CB_ERR)
-                    {
-                        SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
-                        f->userChanged = TRUE;
-
-                        int fieldIndex = (int)(f - &Tabs[g_CurrentPage].fields[0]);
-
-                        wchar_t key[64];
-                        swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
-
-                        WritePrivateProfileStringW(
-                            Tabs[g_CurrentPage].iniSection,
-                            key,
-                            f->lastComboValue,
-                            INI_SEARCH
-                        );
-                    }
-                }
-                break;
-            }
-            }
-
             break;
         }
 
+        case CBN_SELCHANGE:
+        {
+            FIELD_DATA* f = FindFieldByHwnd((HWND)lParam, SearchTabs, SearchTabCount);
+            if (f && f->controlType == FIELD_COMBO && !f->skipRecent)
+            {
+                int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
+                if (sel != CB_ERR)
+                {
+                    SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
+                    f->userChanged = TRUE;
+
+                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
+                    TAB_DATA* tab = &SearchTabs[activeTab];
+
+                    int fieldIndex = (int)(f - &tab->fields[0]);
+
+                    wchar_t key[64];
+                    swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
+
+                    WritePrivateProfileStringW(
+                        SearchTabs[g_CurrentPage].iniSection,
+                        key,
+                        f->lastComboValue,
+                        INI_SEARCH
+                    );
+                }
+            }
+            break;
+        }
+        }
+
+        break;
+    }
 
 
-        case WM_SIZE:
-            int width  = LOWORD(lParam);
-            int height = HIWORD(lParam);
 
-            int pdfW = width * 0.4;
-            int pdfH = height - 100;
-            int pdfX = width - pdfW - 20;
-            int pdfY = height - pdfH - 20;
+    case WM_SIZE:
+        int width = LOWORD(lParam);
+        int height = HIWORD(lParam);
 
-            MoveWindow(
+        int pdfW = width * 0.4;
+        int pdfH = height - 100;
+        int pdfX = width - pdfW - 20;
+        int pdfY = height - pdfH - 20;
+
+        MoveWindow(
             g_pictureFrame,
             pdfX,
             pdfY,
             pdfW,
             pdfH,
             TRUE
-            );
-            break;
-
-
-
-        case WM_ERASEBKGND:
-        {
-            HDC hdc = (HDC)wParam;
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
-            FillRect(hdc, &rc, hBrush);
-            DeleteObject(hBrush);
-            return 1;
-        }
+        );
         break;
 
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+
+
+    case WM_ERASEBKGND:
+    {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
+        FillRect(hdc, &rc, hBrush);
+        DeleteObject(hBrush);
+        return 1;
+    }
+    break;
+
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
     }
     return 0;
 }
 
 LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     int currentPage = g_CurrentPage;
-    switch(msg) {
-        case WM_CLOSE:
+    switch (msg) {
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        break;
+    case WM_DESTROY:
+        hPopupWnd = NULL;
+        break;
+
+
+    case WM_KEYDOWN:
+    {
+        if (wParam == VK_TAB)
+        {
+            HWND current = GetFocus();
+
+            HWND root = GetAncestor(current, GA_ROOT);
+
+            BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
+
+            HWND next = GetNextDlgTabItem(root, current, backwards);
+
+            if (next)
+                SetFocus(next);
+
+            return 0;
+        }
+
+        if (wParam == VK_ESCAPE)
+        {
             DestroyWindow(hwnd);
-            break;
-        case WM_DESTROY:
-            hPopupWnd = NULL;
-            break;
-
-
-        case WM_KEYDOWN:
-        {
-            if (wParam == VK_TAB)
-            {
-                HWND current = GetFocus();
-
-                HWND root = GetAncestor(current, GA_ROOT);
-
-                BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
-
-                HWND next = GetNextDlgTabItem(root, current, backwards);
-
-                if (next)
-                    SetFocus(next);
-
-                return 0;
-            }
-
-            if (wParam == VK_ESCAPE)
-            {
-                DestroyWindow(hwnd);
-                return 0;
-            }
+            return 0;
         }
+    }
 
 
-        case WM_NOTIFY:
+    case WM_NOTIFY:
+    {
+        LPNMHDR pnmh = (LPNMHDR)lParam;
+
+        if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
         {
-            LPNMHDR pnmh = (LPNMHDR)lParam;
-
-            if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
-            {
-                int newPage = TabCtrl_GetCurSel(hPopupTab);
-                SetPage(newPage, INI_SAVE, hPopupWnd);
-            }
+            int newPage = TabCtrl_GetCurSel(hPopupTab);
+            SetPage(hPopupTab, hPopupWnd, SaveTabs, SaveTabCount, newPage, INI_SAVE, IDC_SAVE_BUTTON);
         }
-            break;
-        case WM_COMMAND:
-            switch (LOWORD(wParam)) {
-            case CBN_SELCHANGE: {
-                FIELD_DATA* f = FindFieldByHwnd((HWND)lParam);
-                if (f && f->controlType == FIELD_COMBO && !f->skipRecent) {
-                    int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
-                    if (sel != CB_ERR) {
-                        SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
-                        f->userChanged = TRUE;
+    }
+    break;
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case CBN_SELCHANGE: {
+            FIELD_DATA* f = FindFieldByHwnd((HWND)lParam, SaveTabs, SaveTabCount);
+            if (f && f->controlType == FIELD_COMBO && !f->skipRecent) {
+                int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
+                if (sel != CB_ERR) {
+                    SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
+                    f->userChanged = TRUE;
 
-                        int fieldIndex = (int)(f - &Tabs[g_CurrentPage].fields[0]);
+                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
+                    TAB_DATA* tab = &SaveTabs[activeTab];
 
-                        wchar_t key[64];
-                        swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
-                        WritePrivateProfileStringW(
-                            Tabs[g_CurrentPage].iniSection,
-                            key,
-                            f->lastComboValue,
-                            INI_SAVE
-                        );
-                    }
+                    int fieldIndex = (int)(f - &tab->fields[0]);
+
+                    wchar_t key[64];
+                    swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
+                    WritePrivateProfileStringW(
+                        SaveTabs[g_CurrentPage].iniSection,
+                        key,
+                        f->lastComboValue,
+                        INI_SAVE
+                    );
                 }
-
-                break;
             }
 
-            case IDC_SAVE_BUTTON:
-
-
-                    if (!IsFileSendReady(currentPage)) {
-                        MessageBox(hwnd, L"Please fill in all required fields before saving file.", L"Warning", MB_OK | MB_ICONWARNING);
-                        break;
-                    }
-
-
-                    SaveFile(currentPage);
-
-
-                    DestroyWindow(hwnd);
-
-
-                    break;
-            default: ;
-            }
             break;
-
-
-        case WM_ERASEBKGND:
-        {
-            HDC hdc = (HDC)wParam;
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
-            FillRect(hdc, &rc, hBrush);
-            DeleteObject(hBrush);
-            return 1;
         }
 
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+        case IDC_SAVE_BUTTON:
+
+
+           
+
+
+            SaveFile(currentPage);
+
+
+            DestroyWindow(hwnd);
+
+
+            break;
+        default:;
+        }
+        break;
+
+
+    case WM_ERASEBKGND:
+    {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH hBrush = CreateSolidBrush(RGB(148, 148, 148));
+        FillRect(hdc, &rc, hBrush);
+        DeleteObject(hBrush);
+        return 1;
+    }
+
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
     }
     return 0;
 }
@@ -1789,16 +1896,16 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
     }
 
     HWND hwnd = CreateWindowEx(
-    WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
-    CLASS_NAME,
-    L"New File Alert",
-    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-    400, 200, 700, 450,
-    hwndParent,
-    NULL,
-    g_hInstance,
-    NULL
-);
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
+        CLASS_NAME,
+        L"New File Alert",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        400, 200, 700, 450,
+        hwndParent,
+        NULL,
+        g_hInstance,
+        NULL
+    );
 
     if (!hwnd) {
         return NULL;
@@ -1808,22 +1915,23 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
 
 
     hPopupTab = CreateWindowEx(
-    WS_EX_CONTROLPARENT,
-    WC_TABCONTROL,
-    NULL,
-    WS_CHILD | WS_VISIBLE | WS_THICKFRAME | WS_BORDER,
-    10, 10, 672, 405,
-    hwnd,
-    (HMENU)4001,
-    NULL,
-    NULL
-);
+        WS_EX_CONTROLPARENT,
+        WC_TABCONTROL,
+        NULL,
+        WS_CHILD | WS_VISIBLE | WS_THICKFRAME | WS_BORDER,
+        10, 10, 672, 405,
+        hwnd,
+        (HMENU)4001,
+        NULL,
+        NULL
+    );
 
 
 
 
-    LoadTabsFromIni(hPopupTab, INI_SAVE);
-    SetPage(0, INI_SAVE, hPopupWnd);
+    LoadTabsFromIni(hPopupTab, INI_SAVE, SaveTabs, &SaveTabCount);
+    SetPage(hPopupTab, hPopupWnd, SaveTabs, SaveTabCount, 0, INI_SAVE, IDC_SAVE_BUTTON);
+
 
 
 
@@ -1844,42 +1952,45 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
 
 LRESULT CALLBACK FrameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    switch(msg)
+    switch (msg)
     {
-        case WM_COMMAND: {
-                
-            HWND parent = GetParent(hwnd);
-            if (parent)
-                return SendMessage(parent, msg, wParam, lParam);
-            break;
-        }
+    case WM_COMMAND: {
 
-        case WM_NOTIFY:
+        HWND parent = GetParent(hwnd);
+        if (parent)
+            return SendMessage(parent, msg, wParam, lParam);
+        break;
+    }
+
+    case WM_NOTIFY:
+    {
+        LPNMHDR pnmh = (LPNMHDR)lParam;
+
+        if (pnmh->hwndFrom == hSearchTab &&
+            pnmh->code == TCN_SELCHANGE)
         {
-            LPNMHDR pnmh = (LPNMHDR)lParam;
+            ClearSearchResults();
 
-            if (pnmh->hwndFrom == hSearchTab &&
-                pnmh->code == TCN_SELCHANGE)
-            {
-                int newPage = TabCtrl_GetCurSel(hSearchTab);
-                SetPage(newPage, INI_SEARCH, hwnd);
-                return 0;
-            }
+
+            int newPage = TabCtrl_GetCurSel(hSearchTab);
+            SetPage(hSearchTab, frame, SearchTabs, SearchTabCount, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
+            return 0;
         }
-            break;
+    }
+    break;
 
 
-        case WM_ERASEBKGND:
-        {
-            HDC hdc = (HDC)wParam;
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            HBRUSH hBrush = CreateSolidBrush(RGB(200, 200, 200));
-            FillRect(hdc, &rc, hBrush);
-            DeleteObject(hBrush);
-            return 1;
-        }
-        default: ;
+    case WM_ERASEBKGND:
+    {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH hBrush = CreateSolidBrush(RGB(200, 200, 200));
+        FillRect(hdc, &rc, hBrush);
+        DeleteObject(hBrush);
+        return 1;
+    }
+    default:;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -1895,9 +2006,9 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CREATE:
     {
         g_toolbar = hwnd;
-        hToolbarBrush = CreateSolidBrush(RGB(70, 73, 79)); 
+        hToolbarBrush = CreateSolidBrush(RGB(70, 73, 79));
     }
-    
+
 
     case WM_CTLCOLORSTATIC:
     {
@@ -1911,14 +2022,14 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             return (LRESULT)hToolbarBrush;
         }
-        
+
     }
-    
+
 
 
     case WM_PAINT:
     {
-        
+
 
 
         PAINTSTRUCT ps;
@@ -1959,7 +2070,7 @@ void RegisterFrameClass(HINSTANCE hInstance)
     static bool registered = false;
     if (!registered)
     {
-        WNDCLASS wc = {0};
+        WNDCLASS wc = { 0 };
         wc.lpfnWndProc = FrameWndProc;
         wc.hInstance = hInstance;
         wc.lpszClassName = L"FrameClass";
@@ -1975,7 +2086,7 @@ void RegisterPictureFrameClass(HINSTANCE hInstance)
     static bool registered = false;
     if (!registered)
     {
-        WNDCLASS wcChild = {0};
+        WNDCLASS wcChild = { 0 };
         wcChild.lpfnWndProc = PictureFrameProc;
         wcChild.hInstance = g_hInstance;
         wcChild.lpszClassName = L"PDFChild";
@@ -2025,7 +2136,7 @@ void MakeWindowRounded(HWND hwnd, int width, int height, int radius) {
     GetWindowRect(hwnd, &rc);
     width = rc.right - rc.left;
     height = rc.bottom - rc.top;
-    HRGN hRgn = CreateRoundRectRgn(0, 0, width+1, height+1, 20, 20);
+    HRGN hRgn = CreateRoundRectRgn(0, 0, width + 1, height + 1, 20, 20);
     SetWindowRgn(hwnd, hRgn, TRUE);
 
 }
@@ -2033,12 +2144,12 @@ void MakeWindowRounded(HWND hwnd, int width, int height, int radius) {
 
 LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    switch(msg)
+    switch (msg)
     {
-        case WM_APP_REDRAW_PDF:
-            InvalidateRect(hwnd, NULL, TRUE);
-            UpdateWindow(hwnd);
-            return 0;
+    case WM_APP_REDRAW_PDF:
+        InvalidateRect(hwnd, NULL, TRUE);
+        UpdateWindow(hwnd);
+        return 0;
 
 
     case WM_PAINT:
@@ -2085,15 +2196,15 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     {
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
 
-        scrollY -= delta / 2;   
+        scrollY -= delta / 2;
 
 
-        int newPage = (scrollY + 10) / page_height + 1; 
+        int newPage = (scrollY + 10) / page_height + 1;
         if (newPage != current_pdf_page && newPage <= total_pages) {
             current_pdf_page = newPage;
             WCHAR pageText[64];
-            swprintf_s(pageText, 64, L"%d / %d", current_pdf_page, total_pages);
-            SetWindowTextW(hPageLabel, pageText);  
+            swprintf_s(pageText, 64, L"Page %d / %d", current_pdf_page, total_pages);
+            SetWindowTextW(hPageLabel, pageText);
         }
 
 
@@ -2106,7 +2217,7 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_ERASEBKGND:
         return 1;
-    
+
 
     default:
         return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -2143,7 +2254,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
         registered = true;
     }
 
-    screenWidth  = GetSystemMetrics(SM_CXSCREEN);
+    screenWidth = GetSystemMetrics(SM_CXSCREEN);
     screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
 
@@ -2198,22 +2309,22 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
-   RegisterPictureFrameClass(GetModuleHandle(NULL));
+    RegisterPictureFrameClass(GetModuleHandle(NULL));
 
 
-   
+
 
     HWND pictureFrame = CreateWindowEx(
-            0,
-            L"PDFChild",
-            L"PDF Viewer",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            800, 50, 650, 755,
-            hwnd,
-            NULL,
-            g_hInstance,
-            NULL
-        );
+        0,
+        L"PDFChild",
+        L"PDF Viewer",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        800, 50, 650, 755,
+        hwnd,
+        NULL,
+        g_hInstance,
+        NULL
+    );
 
 
     if (!pictureFrame) {
@@ -2230,7 +2341,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
         L"TOOLBAR",
         NULL,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        800, 10, 650, 45,
+        700, 10, 810, 45,
         hwnd,
         NULL,
         g_hInstance,
@@ -2240,12 +2351,12 @@ HWND OpenSearchWindow(HWND hwndParent) {
     HWND hToolbar = pictureFrameToolbar;
 
 
-    
+
     hPageLabel = CreateWindowW(
-        L"STATIC",         
-        L"1 / 1",
+        L"STATIC",
+        L"",
         WS_CHILD | WS_VISIBLE,
-        5, 12, 50, 18,
+        5, 12, 100, 18,
         hToolbar,
         NULL,
         g_hInstance,
@@ -2255,19 +2366,21 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
     hSearchCountLabel = CreateWindowW(
         L"STATIC",
-        L"1 / 1",
+        L"",
         WS_CHILD | WS_VISIBLE,
-        610, 12, 50, 18,
+        700, 12, 100, 18,
         hToolbar,
         NULL,
         g_hInstance,
         NULL
     );
 
-
-
-
     
+
+
+
+
+
 
 
 
@@ -2288,8 +2401,8 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
-    LoadTabsFromIni(hSearchTab, INI_SEARCH);
-    SetPage(0, INI_SEARCH, frame);
+    LoadTabsFromIni(hSearchTab, INI_SEARCH, SearchTabs, &SearchTabCount);
+    SetPage(hSearchTab, frame, SearchTabs, SearchTabCount, 0, INI_SEARCH, IDC_SEARCH_BUTTON);
 
     RenderPageToCache(g_pictureFrame);
     InvalidateRect(g_pictureFrame, NULL, TRUE);
@@ -2449,9 +2562,9 @@ int WINAPI WinMain(
             HWND root = NULL;
 
             if (g_pdfFrame && IsWindow(g_pdfFrame))
-                root = g_pdfFrame; 
+                root = g_pdfFrame;
             else if (hPopupWnd && IsWindow(hPopupWnd))
-                root = hPopupWnd;   
+                root = hPopupWnd;
 
             if (root)
             {
@@ -2465,7 +2578,7 @@ int WINAPI WinMain(
                 continue;
             }
         }
-    
+
 
 
 
@@ -2483,24 +2596,53 @@ int WINAPI WinMain(
                         DestroyActiveFields();
                         if (g_pictureFrame && IsWindow(g_pictureFrame)) {
                             DestroyWindow(g_pictureFrame);
-                            g_pictureFrame = NULL;  
-                            DestroyWindow(g_pdfFrame); 
+                            g_pictureFrame = NULL;
+                            DestroyWindow(g_pdfFrame);
                             g_pdfFrame = NULL;
                         }
 
                         continue;
                     }
 
-                    if (msg.wParam == VK_UP)
+                    if (msg.wParam == VK_RIGHT)
                     {
-                        previous_page();
+                        if (foundResults && foundResults->count > 0)
+                        {
+                            if (g_CurrentResultIndex < foundResults->count - 1)
+                            {
+                                g_CurrentResultIndex++;
+                                LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
+                                
+
+                                WCHAR pageText[64];
+                                swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+                                SetWindowTextW(hSearchCountLabel, pageText);
+                            
+                            }
+                        }
+                        
+
                         PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
                         continue;
                     }
 
-                    if (msg.wParam == VK_DOWN)
+                    if (msg.wParam == VK_LEFT)
                     {
-                        next_page(total_pages);
+                        if (foundResults && foundResults->count > 0)
+                        {
+                            if (g_CurrentResultIndex > 0)
+                            {
+                                g_CurrentResultIndex--;
+                                LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
+                                
+                                WCHAR pageText[64];
+                                swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+                                SetWindowTextW(hSearchCountLabel, pageText);
+
+                            }
+                        }
+                        
+
                         PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
                         continue;
                     }
@@ -2515,18 +2657,18 @@ int WINAPI WinMain(
 
 
 
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
 
-        }
-
-
-
-        if (doc) fz_drop_document(pdf_ctx, doc);
-        if (pdf_ctx) fz_drop_context(pdf_ctx);
-
-
-
-
-        return (int)msg.wParam;
     }
+
+
+
+    if (doc) fz_drop_document(pdf_ctx, doc);
+    if (pdf_ctx) fz_drop_context(pdf_ctx);
+
+
+
+
+    return (int)msg.wParam;
+}
