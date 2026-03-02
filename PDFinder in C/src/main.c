@@ -307,8 +307,14 @@ void ClearTabFields(int tabIndex, TAB_DATA* tabs)
 
 void RenderPageToCache(HWND hwnd)
 {
-    if (!doc)
-        return;
+    
+
+    if (pdf_ctx)
+    {
+        fz_empty_store(pdf_ctx);
+    }
+
+
 
     if (g_pdfBitmap) {
         DeleteObject(g_pdfBitmap);
@@ -1540,7 +1546,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
         ClearSearchResults();
 
-        if (doc) { fz_drop_document(pdf_ctx, doc); doc = NULL; }
+        if (doc) { fz_drop_document(pdf_ctx, doc); doc = NULL; fz_empty_store(pdf_ctx); }
         if (g_pdfBitmap) { DeleteObject(g_pdfBitmap); g_pdfBitmap = NULL; }
         if (g_pdfMemDC) { DeleteDC(g_pdfMemDC); g_pdfMemDC = NULL; }
 
@@ -1611,12 +1617,6 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             return 0;
         }
 
-        if (wParam == VK_ESCAPE)
-        {
-            PostMessage(hwnd, WM_CLOSE, 0, 0);
-        }
-
-
         if (wParam == VK_RETURN)
         {
             HWND focused = GetFocus();
@@ -1665,8 +1665,25 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
 
                 WCHAR searchCountText[64];
-                swprintf_s(searchCountText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+
+                if (!foundResults || foundResults->count == 0)
+                {
+                    g_CurrentResultIndex = -1;
+
+                    swprintf_s(searchCountText, 64, L"Result   0 / 0");
+                }
+                else
+                {
+                    if (g_CurrentResultIndex < 0)
+                        g_CurrentResultIndex = 0;
+
+                    swprintf_s(searchCountText, 64, L"Result   %d / %d",
+                        g_CurrentResultIndex + 1,
+                        foundResults->count);
+                }
+
                 SetWindowTextW(hSearchCountLabel, searchCountText);
+
 
                 WCHAR pageText[64];
                 swprintf_s(pageText, 64, L"Page   %d / %d", current_pdf_page + 1, total_pages);
@@ -1789,11 +1806,6 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
-        if (wParam == VK_ESCAPE)
-        {
-            DestroyWindow(hwnd);
-            return 0;
-        }
     }
 
 
@@ -2591,18 +2603,6 @@ int WINAPI WinMain(
             {
                 if (msg.message == WM_KEYDOWN)
                 {
-
-                    if (msg.wParam == VK_ESCAPE) {
-                        DestroyActiveFields();
-                        if (g_pictureFrame && IsWindow(g_pictureFrame)) {
-                            DestroyWindow(g_pictureFrame);
-                            g_pictureFrame = NULL;
-                            DestroyWindow(g_pdfFrame);
-                            g_pdfFrame = NULL;
-                        }
-
-                        continue;
-                    }
 
                     if (msg.wParam == VK_RIGHT)
                     {
