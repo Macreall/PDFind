@@ -64,10 +64,13 @@ FOUND_LIST* foundResults;
 
 
 
-HWND hLeftArrow = NULL;
-HWND hRightArrow = NULL;
-HWND hFileNameText = NULL;
+HWND hLeftArrow;
+HWND hRightArrow;
+HWND hFileNameText;
 
+HWND hPrintButton;
+
+void LayoutCustomerNav(HWND hwndParent);
 
 
 
@@ -120,6 +123,7 @@ void previous_page() {
 #define IDC_LEFT_ARROW 107
 #define IDC_RIGHT_ARROW 108
 #define IDC_NAME_TEXT 109
+#define IDC_PRINT_BUTTON 110
 
 
 HWND hPopupTab = NULL;
@@ -137,6 +141,11 @@ int screenWidth;
 int screenHeight;
 
 HWND hPdfImage = NULL;
+
+#ifndef OIC_PRINT
+#define OIC_PRINT 32544
+#endif
+
 
 
 
@@ -251,6 +260,7 @@ HWND OpenSearchWindow(HWND hwndParent);
 LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD_VALUE* fields, int fieldCount);
+void LoadNewPDF(const wchar_t* newPath);
 
 
 
@@ -260,6 +270,41 @@ void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD
 
 
 
+
+void PreviousResult() {
+    if (foundResults && foundResults->count > 0)
+    {
+        if (g_CurrentResultIndex > 0)
+        {
+            g_CurrentResultIndex--;
+            LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
+
+            WCHAR pageText[64];
+            swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+            SetWindowTextW(hSearchCountLabel, pageText);
+
+        }
+    }
+
+}
+
+
+void NextResult() {
+    if (foundResults && foundResults->count > 0)
+    {
+        if (g_CurrentResultIndex < foundResults->count - 1)
+        {
+            g_CurrentResultIndex++;
+            LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
+
+
+            WCHAR pageText[64];
+            swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
+            SetWindowTextW(hSearchCountLabel, pageText);
+
+        }
+    }
+}
 
 
 
@@ -503,6 +548,10 @@ void LoadNewPDF(const wchar_t* newPath)
 
     if (g_toolbar)
         InvalidateRect(g_toolbar, NULL, TRUE);
+
+    WCHAR pageText[64];
+    swprintf_s(pageText, 64, L"Page   %d / %d", current_pdf_page + 1, total_pages);
+    SetWindowTextW(hPageLabel, pageText);
 }
 
 
@@ -1539,6 +1588,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         case ID_TRAY_UNDO:
 
+            int undoresult = MessageBox(
+                hwnd,
+                L"Are you sure you want to undo?",
+                L"Confirm Undo",
+                MB_YESNO | MB_ICONQUESTION
+            );
+
+            if (undoresult -= IDNO)
+            {
+                return 0;
+            }
+
             wchar_t lastSrc[MAX_PATH];
             wchar_t lastDest[MAX_PATH];
 
@@ -2040,6 +2101,7 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         g_toolbar = hwnd;
         hToolbarBrush = CreateSolidBrush(RGB(70, 73, 79));
+        break;
     }
 
 
@@ -2048,13 +2110,15 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HDC hdc = (HDC)wParam;
         HWND hCtrl = (HWND)lParam;
 
-        if (hCtrl == hPageLabel || hCtrl == hSearchCountLabel)
+        if (hCtrl == hPageLabel || hCtrl == hSearchCountLabel || hCtrl == hFileNameText)
         {
             SetTextColor(hdc, RGB(255, 255, 255));
             SetBkColor(hdc, RGB(70, 73, 79));
 
             return (LRESULT)hToolbarBrush;
         }
+
+        break;
 
     }
 
@@ -2076,8 +2140,11 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 255, 255));
-        RECT centerRect = rect;
-        DrawText(hdc, current_opened_pdf, -1, &centerRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        //RECT centerRect = rect;
+        //DrawText(hdc, current_opened_pdf, -1, &centerRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        SetWindowTextW(hFileNameText, current_opened_pdf);
+        LayoutCustomerNav(hwnd);
 
 
 
@@ -2086,8 +2153,26 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_SIZE:
+        LayoutCustomerNav(hwnd);
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
+
+
+    case WM_COMMAND:
+    {
+        switch (LOWORD(wParam))
+        {
+        case IDC_LEFT_ARROW:
+            PreviousResult();
+            break;
+
+        case IDC_RIGHT_ARROW:
+            NextResult();
+            break;
+        }
+        
+        return 0;
+    }
 
     default:
         return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -2385,24 +2470,51 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
-    hLeftArrow = CreateWindowW(L"SCROLLBAR", NULL,
-        WS_VISIBLE | WS_CHILD | SBS_HORZ | SBS_LEFTALIGN,
-        10, 10, 25, 25,
+
+    hLeftArrow = CreateWindowW(
+        L"BUTTON", L"\u25C0",  
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 25, 25,
         hToolbar, (HMENU)IDC_LEFT_ARROW, g_hInstance, NULL);
 
-    hFileNameText = CreateWindowW(L"STATIC", L"",
+    hFileNameText = CreateWindowW(
+        L"STATIC", L"",
         WS_VISIBLE | WS_CHILD | SS_CENTER,
         40, 10, 200, 25,
         hToolbar, (HMENU)IDC_NAME_TEXT, g_hInstance, NULL);
 
-    hRightArrow = CreateWindowW(L"SCROLLBAR", NULL,
-        WS_VISIBLE | WS_CHILD | SBS_HORZ | SBS_RIGHTALIGN,
-        245, 10, 25, 25,
+    hRightArrow = CreateWindowW(
+        L"BUTTON", L"\u25B6", 
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 25, 25,
         hToolbar, (HMENU)IDC_RIGHT_ARROW, g_hInstance, NULL);
 
+    hPrintButton = CreateWindowW(
+        L"BUTTON",
+        NULL,
+        WS_CHILD | WS_VISIBLE | BS_ICON,
+        70, 2, 32, 32,
+        hwnd,
+        (HMENU)IDC_PRINT_BUTTON,
+        g_hInstance,
+        NULL
+    );
+
+    
+   
 
 
 
+    HICON hPrintIcon = (HICON)LoadImageW(
+        NULL,
+        MAKEINTRESOURCEW(OIC_PRINT),
+        IMAGE_ICON,
+        24,
+        24,
+        LR_SHARED | LR_DEFAULTSIZE
+    );
+
+    SendMessageW(hPrintButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)hPrintIcon);
 
 
 
@@ -2497,9 +2609,9 @@ void LayoutCustomerNav(HWND hwndParent)
     wchar_t name[256];
     GetWindowTextW(hFileNameText, name, 256);
 
-    int arrowWidth = 25;
+    int arrowWidth = 50;
     int arrowHeight = 25;
-    int spacing = 8;
+    int spacing = 10;
 
     int textWidth = GetTextPixelWidth(hFileNameText, name);
 
@@ -2511,7 +2623,7 @@ void LayoutCustomerNav(HWND hwndParent)
     GetClientRect(hwndParent, &rc);
 
     int startX = (rc.right - totalWidth) / 2;
-    int y = 10; 
+    int y = 10;
 
     MoveWindow(hLeftArrow,
         startX,
@@ -2711,20 +2823,7 @@ int WINAPI WinMain(
 
                     if (msg.wParam == VK_RIGHT)
                     {
-                        if (foundResults && foundResults->count > 0)
-                        {
-                            if (g_CurrentResultIndex < foundResults->count - 1)
-                            {
-                                g_CurrentResultIndex++;
-                                LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
-                                
-
-                                WCHAR pageText[64];
-                                swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
-                                SetWindowTextW(hSearchCountLabel, pageText);
-                            
-                            }
-                        }
+                        NextResult();
                         
 
                         PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
@@ -2733,22 +2832,7 @@ int WINAPI WinMain(
 
                     if (msg.wParam == VK_LEFT)
                     {
-                        if (foundResults && foundResults->count > 0)
-                        {
-                            if (g_CurrentResultIndex > 0)
-                            {
-                                g_CurrentResultIndex--;
-                                LoadNewPDF(foundResults->items[g_CurrentResultIndex].fullPath);
-                                
-                                WCHAR pageText[64];
-                                swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
-                                SetWindowTextW(hSearchCountLabel, pageText);
-
-
-                                SetWindowTextW(hRightArrow, pageText);
-
-                            }
-                        }
+                        PreviousResult();
                         
 
                         PostMessage(g_pictureFrame, WM_APP_REDRAW_PDF, 0, 0);
