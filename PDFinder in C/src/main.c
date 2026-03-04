@@ -64,6 +64,9 @@ FOUND_LIST* foundResults;
 
 
 
+HWND hLeftArrow = NULL;
+HWND hRightArrow = NULL;
+HWND hFileNameText = NULL;
 
 
 
@@ -113,6 +116,10 @@ void previous_page() {
 #define IDC_SAVE_BUTTON 105
 #define IDC_SEARCH_BUTTON 106
 
+
+#define IDC_LEFT_ARROW 107
+#define IDC_RIGHT_ARROW 108
+#define IDC_NAME_TEXT 109
 
 
 HWND hPopupTab = NULL;
@@ -244,6 +251,34 @@ HWND OpenSearchWindow(HWND hwndParent);
 LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD_VALUE* fields, int fieldCount);
+
+
+
+
+
+
+
+
+
+
+
+
+int GetTextPixelWidth(HWND hStatic, const wchar_t* text)
+{
+    HDC hdc = GetDC(hStatic);
+
+    HFONT hFont = (HFONT)SendMessage(hStatic, WM_GETFONT, 0, 0);
+    HFONT hOld = (HFONT)SelectObject(hdc, hFont);
+
+    SIZE size;
+    GetTextExtentPoint32W(hdc, text, lstrlenW(text), &size);
+
+    SelectObject(hdc, hOld);
+    ReleaseDC(hStatic, hdc);
+
+    return size.cx;
+}
+
 
 
 
@@ -1713,20 +1748,6 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
                     f->userChanged = TRUE;
 
-                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
-                    TAB_DATA* tab = &SearchTabs[activeTab];
-
-                    int fieldIndex = (int)(f - &tab->fields[0]);
-
-                    wchar_t key[64];
-                    swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
-
-                    WritePrivateProfileStringW(
-                        SearchTabs[g_CurrentPage].iniSection,
-                        key,
-                        f->lastComboValue,
-                        INI_SEARCH
-                    );
                 }
             }
             break;
@@ -1830,7 +1851,7 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
                     f->userChanged = TRUE;
 
-                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
+                    int activeTab = TabCtrl_GetCurSel(hPopupTab);
                     TAB_DATA* tab = &SaveTabs[activeTab];
 
                     int fieldIndex = (int)(f - &tab->fields[0]);
@@ -2364,6 +2385,31 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
 
+    hLeftArrow = CreateWindowW(L"SCROLLBAR", NULL,
+        WS_VISIBLE | WS_CHILD | SBS_HORZ | SBS_LEFTALIGN,
+        10, 10, 25, 25,
+        hToolbar, (HMENU)IDC_LEFT_ARROW, g_hInstance, NULL);
+
+    hFileNameText = CreateWindowW(L"STATIC", L"",
+        WS_VISIBLE | WS_CHILD | SS_CENTER,
+        40, 10, 200, 25,
+        hToolbar, (HMENU)IDC_NAME_TEXT, g_hInstance, NULL);
+
+    hRightArrow = CreateWindowW(L"SCROLLBAR", NULL,
+        WS_VISIBLE | WS_CHILD | SBS_HORZ | SBS_RIGHTALIGN,
+        245, 10, 25, 25,
+        hToolbar, (HMENU)IDC_RIGHT_ARROW, g_hInstance, NULL);
+
+
+
+
+
+
+
+
+
+
+
     hPageLabel = CreateWindowW(
         L"STATIC",
         L"",
@@ -2432,6 +2478,65 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
     return hwnd;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+void LayoutCustomerNav(HWND hwndParent)
+{
+    wchar_t name[256];
+    GetWindowTextW(hFileNameText, name, 256);
+
+    int arrowWidth = 25;
+    int arrowHeight = 25;
+    int spacing = 8;
+
+    int textWidth = GetTextPixelWidth(hFileNameText, name);
+
+    int totalWidth = arrowWidth + spacing +
+        textWidth + spacing +
+        arrowWidth;
+
+    RECT rc;
+    GetClientRect(hwndParent, &rc);
+
+    int startX = (rc.right - totalWidth) / 2;
+    int y = 10; 
+
+    MoveWindow(hLeftArrow,
+        startX,
+        y,
+        arrowWidth,
+        arrowHeight,
+        TRUE);
+
+    MoveWindow(hFileNameText,
+        startX + arrowWidth + spacing,
+        y,
+        textWidth,
+        arrowHeight,
+        TRUE);
+
+    MoveWindow(hRightArrow,
+        startX + arrowWidth + spacing + textWidth + spacing,
+        y,
+        arrowWidth,
+        arrowHeight,
+        TRUE);
+}
+
+
+
 
 
 
@@ -2638,6 +2743,9 @@ int WINAPI WinMain(
                                 WCHAR pageText[64];
                                 swprintf_s(pageText, 64, L"Result   %d / %d", g_CurrentResultIndex + 1, foundResults->count);
                                 SetWindowTextW(hSearchCountLabel, pageText);
+
+
+                                SetWindowTextW(hRightArrow, pageText);
 
                             }
                         }
