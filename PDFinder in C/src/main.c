@@ -19,6 +19,7 @@ HWND hToolbar = NULL;
 int total_pages = 0;
 
 wchar_t* current_opened_pdf = NULL;
+wchar_t* current_opened_pdf_full = NULL;
 
 
 HWND g_toolbar = NULL;
@@ -67,8 +68,9 @@ FOUND_LIST* foundResults;
 HWND hLeftArrow;
 HWND hRightArrow;
 HWND hFileNameText;
-
 HWND hPrintButton;
+
+BOOL g_SearchActive = FALSE;
 
 void LayoutCustomerNav(HWND hwndParent);
 
@@ -356,6 +358,32 @@ void OpenSearchSettings(HWND hwnd) {
 }
 
 
+void PrintCurrentPDF()
+{
+    MessageBox(NULL, L"Printing...", L"Print", MB_OK);
+
+
+    if (!current_opened_pdf_full) {
+        MessageBox(NULL, L"No PDF loaded", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    SHELLEXECUTEINFO sei = { 0 };
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_INVOKEIDLIST;
+    sei.lpVerb = L"print";
+    sei.lpFile = current_opened_pdf_full; 
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteEx(&sei)) {
+        DWORD err = GetLastError();
+        wchar_t buf[256];
+        swprintf_s(buf, 256, L"Failed to print PDF!\nError %lu", err);
+        MessageBox(NULL, buf, L"Error", MB_OK | MB_ICONERROR);
+    }
+}
+
+
 
 void ClearTabFields(int tabIndex, TAB_DATA* tabs)
 {
@@ -540,7 +568,13 @@ void LoadNewPDF(const wchar_t* newPath)
     total_pages = fz_count_pages(pdf_ctx, doc);
     current_pdf_page = 0;
 
+
+    wchar_t fullPath[MAX_PATH];
+    wcscpy_s(fullPath, MAX_PATH, newPath);
+    current_opened_pdf_full = _wcsdup(fullPath);
     current_opened_pdf = PathFindFileNameW(newPath);
+
+
 
     RenderPageToCache(g_pictureFrame);
 
@@ -598,6 +632,8 @@ void SearchFolder(
     FOUND_LIST* results
 )
 {
+
+
     FIELD_VALUE fieldValues[64];
     int fieldCount = 0;
 
@@ -698,12 +734,12 @@ void FindFilesFromTab(int currentPage, TAB_DATA* tabs)
         return;
     }
 
+    g_SearchActive = TRUE;
 
     g_CurrentResultIndex = 0;
 
     LoadNewPDF(foundResults->items[0].fullPath);
     
-
 
 
 
@@ -1530,6 +1566,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             HMENU menu = CreatePopupMenu();
 
             AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH, L"Search");
+            AppendMenu(menu, MF_SEPARATOR, 0, NULL);
             AppendMenu(menu, MF_STRING, ID_TRAY_UNDO, L"Undo");
             AppendMenu(menu, MF_SEPARATOR, 0, NULL);
             AppendMenu(menu, MF_STRING, ID_TRAY_SEARCH_SETTINGS, L"Search Settings");
@@ -1652,6 +1689,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         pdfHeight = 0;
         total_pages = 0;
         current_pdf_page = 0;
+        g_SearchActive = FALSE;
 
         current_opened_pdf = L"No PDF loaded";
 
@@ -1664,6 +1702,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         DestroyActiveFields();
 
         current_opened_pdf = NULL;
+        current_opened_pdf_full = NULL;
         doc = NULL;
 
         g_pdfFrame = NULL;
@@ -1686,12 +1725,13 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             ClearSearchResults();
 
             int newPage = TabCtrl_GetCurSel(hSearchTab);
+            g_CurrentPage = newPage;
+
             SetPage(hSearchTab, frame, SearchTabs, SearchTabCount, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
         }
         break;
 
     }
-
 
 
     case WM_KEYDOWN:
@@ -1718,6 +1758,7 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             HWND focused = GetFocus();
 
             int activeTab = TabCtrl_GetCurSel(hSearchTab);
+
             TAB_DATA* tab = &SearchTabs[activeTab];
 
             for (int i = 0; i < tab->fieldCount; i++)
@@ -1743,6 +1784,10 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
         switch (id)
         {
+        case IDC_PRINT_BUTTON:
+            PrintCurrentPDF();
+            break;
+
         case IDC_SEARCH_BUTTON:
         {
             if (id == IDC_SEARCH_BUTTON)
@@ -1821,20 +1866,15 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
 
     case WM_SIZE:
-        int width = LOWORD(lParam);
-        int height = HIWORD(lParam);
-
-        int pdfW = width * 0.4;
-        int pdfH = height - 100;
-        int pdfX = width - pdfW - 20;
-        int pdfY = height - pdfH - 20;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
 
         MoveWindow(
             g_pictureFrame,
-            pdfX,
-            pdfY,
-            pdfW,
-            pdfH,
+            800,
+            55,
+            650,
+            rc.bottom - 55,
             TRUE
         );
         break;
@@ -1898,6 +1938,8 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (pnmh->hwndFrom == hPopupTab && pnmh->code == TCN_SELCHANGE)
         {
             int newPage = TabCtrl_GetCurSel(hPopupTab);
+            g_CurrentPage = newPage;
+
             SetPage(hPopupTab, hPopupWnd, SaveTabs, SaveTabCount, newPage, INI_SAVE, IDC_SAVE_BUTTON);
         }
     }
@@ -2067,6 +2109,8 @@ LRESULT CALLBACK FrameWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 
             int newPage = TabCtrl_GetCurSel(hSearchTab);
+            g_CurrentPage = newPage;
+
             SetPage(hSearchTab, frame, SearchTabs, SearchTabCount, newPage, INI_SEARCH, IDC_SEARCH_BUTTON);
             return 0;
         }
@@ -2103,6 +2147,42 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         hToolbarBrush = CreateSolidBrush(RGB(70, 73, 79));
         break;
     }
+
+
+    case WM_DRAWITEM:
+    {
+        LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+
+        if (dis->CtlType == ODT_BUTTON)
+        {
+            wchar_t text[64];
+            GetWindowTextW(dis->hwndItem, text, 64);
+
+            HBRUSH brush;
+
+            if (dis->itemState & ODS_SELECTED)
+                brush = CreateSolidBrush(RGB(90, 95, 105));
+            else
+                brush = CreateSolidBrush(RGB(79, 84, 94));
+
+            FillRect(dis->hDC, &dis->rcItem, brush);
+            DeleteObject(brush);
+
+            SetBkMode(dis->hDC, TRANSPARENT);
+            SetTextColor(dis->hDC, RGB(255, 255, 255));
+
+            DrawTextW(
+                dis->hDC,
+                text,
+                -1,
+                &dis->rcItem,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE
+            );
+
+            return TRUE;
+        }
+    }
+    break;
 
 
     case WM_CTLCOLORSTATIC:
@@ -2437,7 +2517,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
         L"PDFChild",
         L"PDF Viewer",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        800, 50, 650, 755,
+        800, 55, 650, 755,
         hwnd,
         NULL,
         g_hInstance,
@@ -2469,32 +2549,33 @@ HWND OpenSearchWindow(HWND hwndParent) {
     HWND hToolbar = pictureFrameToolbar;
 
 
-
+    //L"BUTTON", L"\u25C0",
+    //L"BUTTON", L"\u25B6",
 
     hLeftArrow = CreateWindowW(
-        L"BUTTON", L"\u25C0",  
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        L"BUTTON", L"<",  
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
         0, 0, 25, 25,
         hToolbar, (HMENU)IDC_LEFT_ARROW, g_hInstance, NULL);
 
     hFileNameText = CreateWindowW(
         L"STATIC", L"",
         WS_VISIBLE | WS_CHILD | SS_CENTER,
-        40, 10, 200, 25,
+        40, 0, 200, 25,
         hToolbar, (HMENU)IDC_NAME_TEXT, g_hInstance, NULL);
 
     hRightArrow = CreateWindowW(
-        L"BUTTON", L"\u25B6", 
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        L"BUTTON", L">", 
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
         0, 0, 25, 25,
         hToolbar, (HMENU)IDC_RIGHT_ARROW, g_hInstance, NULL);
 
     hPrintButton = CreateWindowW(
         L"BUTTON",
         NULL,
-        WS_CHILD | WS_VISIBLE | BS_ICON,
-        70, 2, 32, 32,
-        hwnd,
+        WS_CHILD | WS_VISIBLE | BS_ICON | BS_OWNERDRAW,
+        120, 8, 30, 30,
+        hToolbar,
         (HMENU)IDC_PRINT_BUTTON,
         g_hInstance,
         NULL
@@ -2607,13 +2688,22 @@ HWND OpenSearchWindow(HWND hwndParent) {
 void LayoutCustomerNav(HWND hwndParent)
 {
     wchar_t name[256];
-    GetWindowTextW(hFileNameText, name, 256);
+    GetWindowTextW(hSearchCountLabel, name, 256);
 
-    int arrowWidth = 50;
+    int arrowWidth = 30;
     int arrowHeight = 25;
     int spacing = 10;
 
-    int textWidth = GetTextPixelWidth(hFileNameText, name);
+    int textWidth = GetTextPixelWidth(hSearchCountLabel, name);
+
+
+
+    wchar_t labelText[256];
+    GetWindowTextW(hFileNameText, labelText, 256);
+    int textWidth2 = GetTextPixelWidth(hFileNameText, labelText);
+
+
+
 
     int totalWidth = arrowWidth + spacing +
         textWidth + spacing +
@@ -2623,28 +2713,52 @@ void LayoutCustomerNav(HWND hwndParent)
     GetClientRect(hwndParent, &rc);
 
     int startX = (rc.right - totalWidth) / 2;
+
+    int startX2 = rc.right - (totalWidth / 2);
+
     int y = 10;
+    int y2 = 5;
+    
+
+
+    MoveWindow(hFileNameText,
+        startX - arrowWidth - spacing,
+        y + y2,
+        textWidth2,
+        arrowHeight,
+        TRUE);
+
+
 
     MoveWindow(hLeftArrow,
-        startX,
+        startX2 - arrowHeight - spacing - (textWidth / 2) - spacing - spacing - spacing,
         y,
         arrowWidth,
         arrowHeight,
         TRUE);
 
-    MoveWindow(hFileNameText,
-        startX + arrowWidth + spacing,
-        y,
+    MoveWindow(hSearchCountLabel,
+        startX2 - arrowHeight - spacing - spacing - spacing - spacing,
+        y + y2,
         textWidth,
         arrowHeight,
         TRUE);
 
     MoveWindow(hRightArrow,
-        startX + arrowWidth + spacing + textWidth + spacing,
+        startX2 + arrowHeight + spacing + spacing,
         y,
         arrowWidth,
         arrowHeight,
         TRUE);
+
+
+
+    ShowWindow(hLeftArrow, g_SearchActive ? SW_SHOW : SW_HIDE);
+    ShowWindow(hRightArrow, g_SearchActive ? SW_SHOW : SW_HIDE);
+    ShowWindow(hFileNameText, g_SearchActive ? SW_SHOW : SW_HIDE);
+    ShowWindow(hSearchCountLabel, g_SearchActive ? SW_SHOW : SW_HIDE);
+    ShowWindow(hPageLabel, g_SearchActive ? SW_SHOW : SW_HIDE);
+    ShowWindow(hPrintButton, g_SearchActive ? SW_SHOW : SW_HIDE);
 }
 
 
