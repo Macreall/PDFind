@@ -104,7 +104,10 @@ HWND hRightArrow;
 HWND hFileNameText;
 HWND hPrintButton;
 
+HWND hCombo;
+
 BOOL g_SearchActive = FALSE;
+
 
 void LayoutCustomerNav(HWND hwndParent);
 
@@ -138,69 +141,67 @@ int CompareNames(const void* a, const void* b)
     return _wcsicmp(s1, s2);
 }
 
-void AddNameSorted(const wchar_t* iniSection, const wchar_t* newName)
+void ModifyNameSorted(const wchar_t* iniSection, const wchar_t* name, bool remove)
 {
     wchar_t section[4096];
     wchar_t names[MAX_NAMES][NAME_LEN];
     wchar_t* ptrs[MAX_NAMES];
     int count = 0;
 
-    GetPrivateProfileSectionW(
-        iniSection,
-        section,
-        4096,
-        INI_SAVE
-    );
+    GetPrivateProfileSectionW(iniSection, section, 4096, INI_SAVE);
 
     wchar_t* p = section;
-
-    while (*p && count < 256)
+    while (*p && count < MAX_NAMES)
     {
         wchar_t* eq = wcschr(p, L'=');
-
         if (eq)
         {
             wchar_t* value = eq + 1;
-
             wcscpy(names[count], value);
             ptrs[count] = names[count];
-
             count++;
         }
-
         p += wcslen(p) + 1;
     }
-    wcscpy(names[count], newName);
-    ptrs[count] = names[count];
-    count++;
+
+    if (remove)
+    {
+        int newCount = 0;
+        wchar_t* newPtrs[MAX_NAMES];
+        for (int i = 0; i < count; i++)
+        {
+            if (wcscmp(ptrs[i], name) != 0)
+            {
+                newPtrs[newCount++] = ptrs[i];
+            }
+        }
+        count = newCount;
+        for (int i = 0; i < count; i++)
+            ptrs[i] = newPtrs[i];
+    }
+    else
+    {
+        if (count < MAX_NAMES)
+        {
+            wcscpy(names[count], name);
+            ptrs[count] = names[count];
+            count++;
+        }
+    }
 
     qsort(ptrs, count, sizeof(wchar_t*), CompareNames);
 
     WritePrivateProfileStringW(iniSection, NULL, NULL, INI_SAVE);
     WritePrivateProfileStringW(iniSection, NULL, NULL, INI_SEARCH);
 
-
     for (int i = 0; i < count; i++)
     {
         wchar_t key[16];
         swprintf_s(key, 16, L"%d", i + 1);
-
-        WritePrivateProfileStringW(
-            iniSection,
-            key,
-            ptrs[i],
-            INI_SAVE
-        );
-
-        WritePrivateProfileStringW(
-            iniSection,
-            key,
-            ptrs[i],
-            INI_SEARCH
-        );
+        WritePrivateProfileStringW(iniSection, key, ptrs[i], INI_SAVE);
+        WritePrivateProfileStringW(iniSection, key, ptrs[i], INI_SEARCH);
     }
 }
-
 
 
 
@@ -259,13 +260,12 @@ void previous_page() {
 #define IDC_ALL_PAGES 122
 #define IDC_START_PAGE 123
 #define IDC_END_PAGE 124
-#define IDC_ADD_BUTTON 125
-#define IDC_PRINT_PDF 126
+#define IDC_PRINT_PDF 127
+#define IDC_CANCEL_PDF 128
 
 
 HWND hPopupTab = NULL;
 HWND hPopupWnd = NULL;
-HWND hButton = NULL;
 
 HWND hSearchTab = NULL;
 HWND hSearchWnd = NULL;
@@ -331,6 +331,8 @@ typedef struct
     wchar_t placeholder[256];
 
     HWND hControl;
+    HWND hButtonPlus;
+    HWND hButtonMinus;
     HWND hwnd;
 
 } FIELD_DATA;
@@ -376,6 +378,8 @@ typedef struct {
 #define MAX_FIELDS 32
 HWND fieldLabels[MAX_FIELDS];
 HWND fieldControls[MAX_FIELDS];
+HWND fieldPlusButtons[MAX_FIELDS];
+HWND fieldMinusButtons[MAX_FIELDS];
 int activeFieldCount = 0;
 
 TAB_DATA SearchTabs[MAX_TABS];
@@ -411,6 +415,75 @@ static BOOL g_InputConfirmed = FALSE;
 
 
 
+
+
+
+
+
+void PopulatePrinterCombo(HWND hCombo)
+{
+    DWORD needed = 0, returned = 0;
+
+    EnumPrinters(
+        PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+        NULL,
+        2,
+        NULL,
+        0,
+        &needed,
+        &returned
+    );
+
+    BYTE* buffer = (BYTE*)malloc(needed);
+
+    if (!EnumPrinters(
+        PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+        NULL,
+        2,
+        buffer,
+        needed,
+        &needed,
+        &returned))
+    {
+        free(buffer);
+        return;
+    }
+
+    PRINTER_INFO_2* printers = (PRINTER_INFO_2*)buffer;
+
+    SendMessage(hCombo, CB_RESETCONTENT, 0, 0);
+
+    for (DWORD i = 0; i < returned; i++)
+    {
+        SendMessage(
+            hCombo,
+            CB_ADDSTRING,
+            0,
+            (LPARAM)printers[i].pPrinterName
+        );
+    }
+
+    free(buffer);
+
+    SendMessage(hCombo, CB_SETCURSEL, 0, 0);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 LRESULT CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -418,7 +491,7 @@ LRESULT CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_CREATE:
     {
-        CreateWindowW(L"STATIC", L"Enter Name:",
+        CreateWindowW(L"STATIC", L"Enter Here:",
             WS_CHILD | WS_VISIBLE,
             20, 20, 200, 20,
             hwnd, NULL, NULL, NULL);
@@ -461,6 +534,23 @@ LRESULT CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         break;
     }
 
+    case WM_KEYDOWN:
+        if (wParam == VK_RETURN)
+        {
+            int len = GetWindowTextLengthW(g_hEdit);
+            if (len > 0)
+            {
+                GetWindowTextW(g_hEdit, g_Result, g_ResultSize);
+                g_InputConfirmed = TRUE;
+                DestroyWindow(hwnd);
+            }
+            else
+            {
+                SetFocus(g_hEdit);
+            }
+        }
+        break;
+
     case WM_CLOSE:
         DestroyWindow(hwnd);
         break;
@@ -492,7 +582,7 @@ BOOL InputBox(HWND parent, HINSTANCE hInstance, wchar_t* result, int resultSize)
         L"Add New",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        320, 140,
+        320, 180,
         parent,
         NULL,
         hInstance,
@@ -620,27 +710,78 @@ void OpenSearchSettings(HWND hwnd) {
 }
 
 
-void PrintCurrentPDF()
+void PrintCurrentPDF(HWND hwnd)
 {
 
-    if (!current_opened_pdf_full) {
+
+    PRINT_SETTINGS* settings =
+        (PRINT_SETTINGS*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+    if (!settings)
+        return;
+
+
+    if (!current_opened_pdf_full)
+    {
         MessageBox(NULL, L"No PDF loaded", L"Error", MB_OK | MB_ICONERROR);
         return;
     }
 
-    SHELLEXECUTEINFO sei = { 0 };
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_INVOKEIDLIST;
-    sei.lpVerb = L"print";
-    sei.lpFile = current_opened_pdf_full; 
-    sei.nShow = SW_HIDE;
 
-    if (!ShellExecuteEx(&sei)) {
-        DWORD err = GetLastError();
-        wchar_t buf[256];
-        swprintf_s(buf, 256, L"Failed to print PDF!\nError %lu", err);
-        MessageBox(NULL, buf, L"Error", MB_OK | MB_ICONERROR);
+
+    wchar_t printerName[256];
+
+    int sel = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
+    if (sel == CB_ERR)
+    {
+        MessageBox(NULL, L"No printer selected", L"Error", MB_OK);
+        return;
     }
+
+    SendMessage(hCombo, CB_GETLBTEXT, sel, (LPARAM)printerName);
+
+    int copies = GetDlgItemInt(hOptionsPanel, IDC_COPIES_EDIT, NULL, FALSE);
+
+    int startPage = GetDlgItemInt(hOptionsPanel, IDC_START_PAGE, NULL, FALSE);
+    int endPage = GetDlgItemInt(hOptionsPanel, IDC_END_PAGE, NULL, FALSE);
+
+    
+    BOOL allPages = settings->allPages;
+
+    wchar_t params[512];
+
+    if (allPages)
+    {
+        swprintf(params, 512, L"\"%s\"", current_opened_pdf_full);
+    }
+    else
+    {
+        swprintf(params, 512, L"\"%s\"", current_opened_pdf_full);
+    }
+
+
+    HINSTANCE result = ShellExecute(
+        NULL,
+        L"printto",
+        current_opened_pdf_full,
+        printerName,
+        NULL,
+        SW_HIDE
+    );
+
+
+    if ((INT_PTR)result <= 32)
+    {
+        MessageBox(hwnd, L"Print has failed", L"Error", MB_OK | MB_ICONERROR);
+    }
+    else
+    {
+        MessageBox(hwnd, L"Print job sent successfully!", L"Success", MB_OK);
+    }
+
+
+    
+
 }
 
 
@@ -981,7 +1122,6 @@ void SearchFolderRecursive(
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            // recurse into subfolder
             SearchFolderRecursive(fullPath, tab, results);
         }
         else
@@ -1141,12 +1281,39 @@ void RemoveLastPath(LPCWSTR iniPath) {
 }
 
 void DestroyActiveFields(void) {
+
+
+
     for (int i = 0; i < activeFieldCount; i++)
     {
         if (fieldLabels[i])   DestroyWindow(fieldLabels[i]);
         if (fieldControls[i]) DestroyWindow(fieldControls[i]);
+        if (fieldPlusButtons[i])  DestroyWindow(fieldPlusButtons[i]);
+        if (fieldMinusButtons[i])  DestroyWindow(fieldMinusButtons[i]);
+
+      
     }
     activeFieldCount = 0;
+}
+
+
+void DestroyTabSaveButton(TAB_DATA* tab, int pageCount)
+{
+
+    for (int i = 0; i < pageCount; i++) {
+        if (tab->hButton && IsWindow(tab->hButton))
+        {
+            DestroyWindow(tab->hButton);
+            tab->hButton = NULL;
+        }
+
+        if (tab->hButton && IsWindow(tab->hButton))
+        {
+            DestroyWindow(tab->hButton);
+            tab->hButton = NULL;
+        }
+    }
+    
 }
 
 FIELD_DATA* FindFieldByHwnd(HWND hCtrl, TAB_DATA* tabs, int tabCount) {
@@ -1454,24 +1621,45 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showA
 
 
             if (showAddButtons) {
-                int btnHeight = 20;
-                int btnWidth = 30;
+                int btnHeight = 15;
+                int btnWidth = 20;
+                int spacing = 5;
 
-                HWND hBtn = CreateWindowW(
+                f->hButtonPlus = CreateWindowW(
                     L"BUTTON",
-                    L"+/-",
+                    L"+",
                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                     drawX + drawWidth - btnWidth,
-                    drawY - 25,
+                    drawY - 20,
                     btnWidth,
                     btnHeight,
                     parent,
-                    (HMENU)(3500 + i),
+                    (HMENU)(INT_PTR)(3500 + i),
                     g_hInstance,
                     NULL
                 );
 
-                SetWindowLongPtr(hBtn, GWLP_USERDATA, (LONG_PTR)f);
+                SetWindowLongPtr(f->hButtonPlus, GWLP_USERDATA, (LONG_PTR)f);
+
+
+
+                f->hButtonMinus = CreateWindowW(
+                    L"BUTTON",
+                    L"-",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    drawX + drawWidth - btnWidth - spacing - btnWidth,
+                    drawY - 20,
+                    btnWidth,
+                    btnHeight,
+                    parent,
+                    (HMENU)(INT_PTR)(3580 + i),
+                    g_hInstance,
+                    NULL
+                );
+
+                SetWindowLongPtr(f->hButtonMinus, GWLP_USERDATA, (LONG_PTR)f);
+
+
             }
 
             f->hControl = CreateWindowW(
@@ -1498,6 +1686,9 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showA
         }
 
         fieldControls[i] = f->hControl;
+        fieldPlusButtons[i] = f->hButtonPlus;
+        fieldMinusButtons[i] = f->hButtonMinus;
+
 
 
         activeFieldCount++;
@@ -1766,6 +1957,7 @@ void SetPage(
     TabCtrl_SetCurSel(hTab, newPage);
 
     DestroyActiveFields();
+    DestroyTabSaveButton(tabs, pageCount);
 
     CreateFieldsFromTab(hwndParent, &tabs[newPage], iniPath, showAddButtons);
     CreateButtons(hwndParent, newPage, iniPath, buttonId, tabs);
@@ -2298,7 +2490,7 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         int id = LOWORD(wParam);
 
-        if (id >= 3500 && id < 3600)
+        if (id >= 3500 && id < 3540)
         {
             HWND btn = (HWND)lParam;
 
@@ -2311,12 +2503,43 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (InputBox(hwnd, g_hInstance, name, 128))
             {
-                AddNameSorted(f->sourceName, name); 
+                ModifyNameSorted(f->sourceName, name, false); 
                 PopulateControlData(f, INI_SAVE);   
             }
 
             return 0;
         }
+
+        if (id >= 3545 && id < 3600)
+        {
+            HWND btn = (HWND)lParam;
+
+            FIELD_DATA* f = (FIELD_DATA*)GetWindowLongPtr(btn, GWLP_USERDATA);
+
+            if (!f)
+                return 0;
+
+            int sel = (int)SendMessageW(f->hControl, CB_GETCURSEL, 0, 0);
+
+            if (sel != CB_ERR)
+            {
+                wchar_t itemText[256];
+                SendMessageW(f->hControl, CB_GETLBTEXT, sel, (LPARAM)itemText);
+
+                wchar_t msg[300];
+                swprintf_s(msg, 300, L"Would you like to remove \"%s\"?", itemText);
+
+                if (MessageBoxW(hwnd, msg, L"Confirm Delete", MB_YESNO | MB_ICONQUESTION) == IDYES)
+                {
+                    SendMessageW(f->hControl, CB_DELETESTRING, sel, 0);
+                    ModifyNameSorted(f->sourceName, itemText, true);
+                    PopulateControlData(f, INI_SAVE);
+                }
+            }
+        }
+
+
+
 
         switch (LOWORD(wParam)) {
 
@@ -2405,11 +2628,10 @@ LRESULT CALLBACK OptionsPanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
 
 
-
 LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 
-    PRINT_SETTINGS* g_printSettings = (PRINT_SETTINGS*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    PRINT_SETTINGS* settings = (PRINT_SETTINGS*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 
     switch (msg)
@@ -2425,10 +2647,10 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
 
         g_PrintFrame = NULL;
-        
 
-        if (g_printSettings)
-            free(g_printSettings);
+
+        if (settings)
+            free(settings);
 
 
         if (g_pdfFrame) {
@@ -2443,11 +2665,18 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_CREATE:
     {
+        CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+        settings = (PRINT_SETTINGS*)cs->lpCreateParams;
+
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)settings);
+
+
+
         gOptionsBrush = CreateSolidBrush(RGB(240, 240, 240));
         gPreviewBrush = CreateSolidBrush(RGB(220, 220, 220));
 
         WNDCLASS wc = { 0 };
-        wc.lpfnWndProc = DefWindowProc;
+        wc.lpfnWndProc = OptionsPanelProc;
         wc.hInstance = GetModuleHandle(NULL);
         wc.lpszClassName = L"OptionsPanel";
         wc.hbrBackground = gOptionsBrush;
@@ -2456,7 +2685,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 
         WNDCLASS wc1 = { 0 };
-        wc1.lpfnWndProc = OptionsPanelProc;
+        wc1.lpfnWndProc = DefWindowProc;
         wc1.hInstance = GetModuleHandle(NULL);
         wc1.lpszClassName = L"PreviewPanel";
         wc1.hbrBackground = gPreviewBrush;
@@ -2477,12 +2706,31 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 
 
+
+        hCombo = CreateWindow(
+            L"COMBOBOX",
+            NULL,
+            CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            20, 20, 150, 200,
+            hOptionsPanel,
+            (HMENU)1001,
+            NULL,
+            NULL
+        );
+
+        PopulatePrinterCombo(hCombo);
+
+
+
+
+
+
         // Copies
         CreateWindowW(
             L"STATIC",
             L"Copies:",
             WS_CHILD | WS_VISIBLE,
-            20, 20, 80, 20,
+            20, 60, 80, 20,
             hOptionsPanel,
             NULL,
             GetModuleHandle(NULL),
@@ -2493,7 +2741,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"EDIT",
             L"1",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-            100, 20, 60, 22,
+            100, 60, 60, 22,
             hOptionsPanel,
             (HMENU)IDC_COPIES_EDIT,
             GetModuleHandle(NULL),
@@ -2505,7 +2753,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"BUTTON",
             L"All Pages",
             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
-            20, 60, 120, 20,
+            20, 100, 120, 20,
             hOptionsPanel,
             (HMENU)IDC_ALL_PAGES,
             GetModuleHandle(NULL),
@@ -2516,7 +2764,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"BUTTON",
             L"Custom Pages",
             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-            20, 90, 120, 20,
+            20, 130, 120, 20,
             hOptionsPanel,
             (HMENU)IDC_CUSTOM_PAGES,
             GetModuleHandle(NULL),
@@ -2532,7 +2780,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"STATIC",
             L"From:",
             WS_CHILD | WS_VISIBLE,
-            40, 120, 40, 20,
+            40, 190, 40, 20,
             hOptionsPanel,
             NULL,
             GetModuleHandle(NULL),
@@ -2543,7 +2791,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"EDIT",
             L"1",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-            80, 120, 50, 22,
+            80, 190, 50, 22,
             hOptionsPanel,
             (HMENU)IDC_START_PAGE,
             GetModuleHandle(NULL),
@@ -2556,7 +2804,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"STATIC",
             L"To:",
             WS_CHILD | WS_VISIBLE,
-            40, 150, 40, 20,
+            40, 220, 40, 20,
             hOptionsPanel,
             NULL,
             GetModuleHandle(NULL),
@@ -2567,7 +2815,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             L"EDIT",
             L"1",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-            80, 150, 50, 22,
+            80, 220, 50, 22,
             hOptionsPanel,
             (HMENU)IDC_END_PAGE,
             GetModuleHandle(NULL),
@@ -2579,7 +2827,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         CreateWindowW(
             L"BUTTON",
             L"Print",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
             160, 510, 80, 30,
             hOptionsPanel,
             (HMENU)IDC_PRINT_PDF,
@@ -2590,10 +2838,10 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         CreateWindowW(
             L"BUTTON",
             L"Cancel",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
             60, 510, 80, 30,
             hOptionsPanel,
-            (HMENU)IDC_PRINT_PDF,
+            (HMENU)IDC_CANCEL_PDF,
             GetModuleHandle(NULL),
             NULL
         );
@@ -2602,6 +2850,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 
         SendMessage(hAllPagesRadio, BM_SETCHECK, BST_CHECKED, 0);
+        settings->allPages = true;
         EnableWindow(hStartPageEdit, FALSE);
         EnableWindow(hEndPageEdit, FALSE);
 
@@ -2619,56 +2868,52 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             NULL
         );
 
-
-
-
-
         return 0;
 
     }
 
     case WM_COMMAND:
+    {
+
         switch (LOWORD(wParam)) {
+
         case IDC_ALL_PAGES:
         {
-
-            g_printSettings->allPages = true;
-
+            settings->allPages = true;
             EnableWindow(hStartPageEdit, FALSE);
             EnableWindow(hEndPageEdit, FALSE);
-
-            InvalidateRect(hOptionsPanel, NULL, TRUE); 
-            UpdateWindow(hOptionsPanel);
-
             break;
         }
 
         case IDC_CUSTOM_PAGES:
         {
-
-            g_printSettings->allPages = false;
-
+            settings->allPages = false;
             EnableWindow(hStartPageEdit, TRUE);
             EnableWindow(hEndPageEdit, TRUE);
-
-            InvalidateRect(hOptionsPanel, NULL, TRUE);
-            UpdateWindow(hOptionsPanel);
-
             break;
         }
 
-        
+        case IDC_PRINT_PDF:
+        {
+            PrintCurrentPDF(hwnd);
+            break;
         }
 
+        case IDC_CANCEL_PDF:
+        {
+            DestroyWindow(hwnd);
+            break;
+        }
 
-        return 0;
-
+        }
+        
+    }
+    return 0;
     }
 
     return DefWindowProc(hwnd, msg, wParam, lParam);
+
 }
-
-
 
 
 
@@ -3371,6 +3616,11 @@ HWND OpenPrintWindow(HWND hwndParent) {
 
 
 
+    PRINT_SETTINGS* settings = malloc(sizeof(PRINT_SETTINGS));
+    ZeroMemory(settings, sizeof(PRINT_SETTINGS));
+
+
+
 
     HWND hwnd = CreateWindowExW(
         WS_EX_DLGMODALFRAME,
@@ -3382,7 +3632,7 @@ HWND OpenPrintWindow(HWND hwndParent) {
         hwndParent,
         NULL,
         GetModuleHandle(NULL),
-        NULL
+        settings
     );
 
     if (!hwnd)
@@ -3395,12 +3645,6 @@ HWND OpenPrintWindow(HWND hwndParent) {
 
 
 
-
-
-    PRINT_SETTINGS* g_printSettings = malloc(sizeof(PRINT_SETTINGS));
-    ZeroMemory(g_printSettings, sizeof(PRINT_SETTINGS));
-
-    SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)g_printSettings);
 
 
 
