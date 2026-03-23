@@ -748,40 +748,117 @@ void PrintCurrentPDF(HWND hwnd)
     
     BOOL allPages = settings->allPages;
 
-    wchar_t params[512];
+    int start = allPages ? 0 : max(0, startPage - 1);
+    int end = allPages ? total_pages : min(total_pages, endPage);
 
-    if (allPages)
+
+    HDC hdcPrinter = CreateDCW(L"WINSPOOL", printerName, NULL, NULL);
+    if (!hdcPrinter)
     {
-        swprintf(params, 512, L"\"%s\"", current_opened_pdf_full);
-    }
-    else
-    {
-        swprintf(params, 512, L"\"%s\"", current_opened_pdf_full);
-    }
-
-
-    HINSTANCE result = ShellExecute(
-        NULL,
-        L"printto",
-        current_opened_pdf_full,
-        printerName,
-        NULL,
-        SW_HIDE
-    );
-
-
-    if ((INT_PTR)result <= 32)
-    {
-        MessageBox(hwnd, L"Print has failed", L"Error", MB_OK | MB_ICONERROR);
-    }
-    else
-    {
-        MessageBox(hwnd, L"Print job sent successfully!", L"Success", MB_OK);
+        MessageBox(hwnd, L"Printer DC failed", L"Error", MB_OK);
+        return;
     }
 
+    DOCINFOW di = { 0 };
+    di.cbSize = sizeof(di);
+    di.lpszDocName = L"PDF Print Job";
 
-    
+    if (StartDocW(hdcPrinter, &di) <= 0)
+    {
+        DeleteDC(hdcPrinter);
+        MessageBox(hwnd, L"StartDoc failed", L"Error", MB_OK);
+        return;
+    }
 
+   
+
+    int physicalWidth = GetDeviceCaps(hdcPrinter, PHYSICALWIDTH);
+    int physicalHeight = GetDeviceCaps(hdcPrinter, PHYSICALHEIGHT);
+    int physicalOffsetX = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETX);
+    int physicalOffsetY = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETY);
+
+
+    int printableWidth = physicalWidth - (2 * physicalOffsetX); 
+    int printableHeight = physicalHeight - (2 * physicalOffsetY);
+
+
+    for (int c = 0; c < max(1, copies); c++)
+    {
+        for (int i = start; i < end; i++)
+        {
+            if (StartPage(hdcPrinter) <= 0)
+                break;
+
+
+
+            fz_page* page = fz_load_page(pdf_ctx, doc, i);
+            fz_rect bounds = fz_bound_page(pdf_ctx, page);
+
+            float pageW = bounds.x1 - bounds.x0;
+            float pageH = bounds.y1 - bounds.y0;
+            float scaleX = (float)printableWidth / pageW;
+            float scaleY = (float)printableHeight / pageH;
+
+            float scale = min(scaleX, scaleY);
+
+
+            fz_matrix ctm = fz_translate(-bounds.x0, -bounds.y0);
+
+            fz_rect r = fz_transform_rect(bounds, ctm);
+            fz_irect bbox = fz_round_rect(r);
+            fz_pixmap* pix = fz_new_pixmap_with_bbox(pdf_ctx, fz_device_rgb(pdf_ctx), bbox, NULL, 1);
+            fz_clear_pixmap_with_value(pdf_ctx, pix, 255);
+
+            fz_device* dev = fz_new_draw_device(pdf_ctx, ctm, pix);
+            fz_run_page(pdf_ctx, page, dev, ctm, NULL);
+            fz_drop_device(pdf_ctx, dev);
+
+
+            int w = fz_pixmap_width(pdf_ctx, pix);
+            int h = fz_pixmap_height(pdf_ctx, pix);
+
+            BITMAPINFO bmi = { 0 };
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            
+
+            int offsetX = (printableWidth - w) / 2;
+            int offsetY = (printableHeight - h) / 2;
+
+            StretchDIBits(
+                hdcPrinter,
+                0, 0,
+                printableWidth, printableHeight,
+                0, 0,
+                w, h,
+                fz_pixmap_samples(pdf_ctx, pix),
+                &bmi,
+                DIB_RGB_COLORS,
+                SRCCOPY
+            );
+
+            EndPage(hdcPrinter);
+
+            fz_drop_pixmap(pdf_ctx, pix);   
+            fz_drop_page(pdf_ctx, page);
+
+
+            
+        }
+    }
+
+
+
+    EndDoc(hdcPrinter);
+    DeleteDC(hdcPrinter);
+
+
+    DestroyWindow(hwnd);
 }
 
 
