@@ -18,7 +18,6 @@ LPCWSTR INI_SAVE = L"C:\\watchFolder\\save_settings.ini";
 LPCWSTR INI_SEARCH = L"C:\\watchFolder\\search_settings.ini";
 
 
-// PrintFrame
 HWND g_PrintFrame = NULL;
 HWND hOptionsPanel;
 HWND hPreviewFrame;
@@ -239,11 +238,11 @@ void previous_page() {
 
 #define WM_TRAYICON (WM_USER + 1)
 #define WM_APP_REDRAW_PDF   (WM_APP + 1)
-#define ID_TRAY_EXIT 1001
-#define ID_TRAY_SAVE_SETTINGS  1002
-#define ID_TRAY_SEARCH_SETTINGS  1003
-#define ID_TRAY_SEARCH  1004
-#define ID_TRAY_UNDO 1005
+#define ID_TRAY_EXIT 90
+#define ID_TRAY_SAVE_SETTINGS  91
+#define ID_TRAY_SEARCH_SETTINGS  92
+#define ID_TRAY_SEARCH  93
+#define ID_TRAY_UNDO 94
 #define IDC_COMBOBOX_DATES 101
 
 #define IDC_SAVE_BUTTON 105
@@ -288,6 +287,7 @@ HWND hPdfImage = NULL;
 
 
 
+#define MAX_BUTTONS 10
 
 
 
@@ -333,25 +333,16 @@ typedef struct
     HWND hControl;
     HWND hButtonPlus;
     HWND hButtonMinus;
+    HWND hListboxButton;
     HWND hwnd;
 
 } FIELD_DATA;
 
-typedef struct {
-    wchar_t name[64];
-    wchar_t type[16];
-
-
-    wchar_t iniSection[64];
-    FIELD_DATA fields[16];
-    u_int fieldCount;
-    HWND hPage; 
-
-    HWND hButton;
-    LPCWSTR iniPath;
-
-    BOOL searchRecursive;
-} TAB_DATA;
+typedef enum {
+    BTN_SAVE,
+    BTN_SEARCH,
+    BTN_OPEN_LIST
+} BUTTON_FUNCTION;
 
 typedef struct {
     wchar_t name[64];
@@ -363,7 +354,31 @@ typedef struct {
     u_int height;
 
     HWND hWnd;
+    int id;
+
+    BUTTON_FUNCTION function;
 } BUTTON_DATA;
+
+typedef struct {
+    wchar_t name[64];
+    wchar_t type[16];
+
+
+    wchar_t iniSection[64];
+    FIELD_DATA fields[16];
+    u_int fieldCount;
+    HWND hPage; 
+
+    BUTTON_DATA buttons[MAX_BUTTONS];
+    int buttonCount;
+
+    LPCWSTR iniPath;
+
+    BOOL searchRecursive;
+} TAB_DATA;
+
+
+
 
 typedef struct {
     wchar_t label[64];
@@ -396,7 +411,7 @@ u_int SearchTabCount;
 u_int SaveTabCount;
 
 
-void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showAddButtons);
+void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showAddButtons, BOOL showListboxButton);
 HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text);
 HWND OpenSearchWindow(HWND hwndParent);
 HWND OpenPrintWindow(HWND hwndParent);
@@ -412,6 +427,463 @@ static HWND g_hEdit;
 static wchar_t* g_Result;
 static int g_ResultSize;
 static BOOL g_InputConfirmed = FALSE;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+HWND hListBox;
+HWND hNameEdit;
+HWND hPOEdit;
+HWND g_customerPopup = NULL;
+
+
+#define IDC_SHOW_LISTBOX 1090
+#define IDC_REMOVE_LISTBOX 1059
+#define IDC_CLOSE_LISTBOX 1060
+
+
+
+#define ID_NAME      1002
+#define ID_PO        1003
+#define ID_ADD       1004
+#define ID_REMOVE    1005
+#define ID_SAVE      1006
+#define ID_CANCEL    1007
+#define IDC_NAME_EDIT 1055
+#define IDC_ADD_LISTBOX 1056
+#define IDC_LISTBOX   1057
+#define IDC_PO_EDIT 1058
+
+
+typedef struct {
+    wchar_t name[256];
+    wchar_t poNumber[64];
+} CustomerEntry;
+
+typedef struct {
+    int count;
+    CustomerEntry* items;
+} TempCustomerList;
+
+TempCustomerList g_customerList = { 0, NULL };
+wchar_t g_currentDate[16] = L"2026-03-26"; 
+
+
+
+void RefreshListBox(HWND hListBox) {
+    SendMessageW(hListBox, LB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < g_customerList.count; i++) {
+        wchar_t buffer[320];
+        swprintf_s(buffer, 320, L"%s|%s", g_customerList.items[i].name, g_customerList.items[i].poNumber);
+        SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)buffer);
+    }
+}
+
+void RemoveCustomerByIndex(int index)
+{
+    if (index < 0 || index >= g_customerList.count)
+        return;
+
+    for (int i = index; i < g_customerList.count - 1; i++)
+    {
+        g_customerList.items[i] = g_customerList.items[i + 1];
+    }
+
+    g_customerList.count--;
+}
+
+
+
+LRESULT CALLBACK CustomerPopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+
+    case WM_COMMAND:
+    {
+
+        int id = LOWORD(wParam);
+
+
+        if (id == IDC_CLOSE_LISTBOX)
+        {
+            DestroyWindow(hwnd); 
+        }
+
+
+        if (id == IDC_REMOVE_LISTBOX)
+        {
+            int sel = (int)SendMessage(hListBox, LB_GETCURSEL, 0, 0);
+
+            if (sel == LB_ERR)
+            {
+                MessageBox(hwnd, L"Please select an item to remove.", L"Info", MB_OK);
+                break;
+            }
+
+            wchar_t text[256];
+            SendMessage(hListBox, LB_GETTEXT, sel, (LPARAM)text);
+
+            int result = MessageBox(
+                hwnd,
+                L"Are you sure you want to remove this item?",
+                L"Confirm",
+                MB_YESNO | MB_ICONQUESTION
+            );
+
+            if (result == IDYES)
+            {
+                SendMessage(hListBox, LB_DELETESTRING, sel, 0);
+
+                RemoveCustomerByIndex(sel);
+
+            }
+        }
+
+
+
+
+
+        if (id == IDC_ADD_LISTBOX)
+        {
+            wchar_t Namebuffer[256];
+            GetWindowTextW(hNameEdit, Namebuffer, 256);
+
+            wchar_t poBuffer[256];
+            GetWindowTextW(hPOEdit, poBuffer, 256);
+
+            if (wcslen(Namebuffer) > 0 && wcslen(poBuffer) > 0)
+            {
+                CustomerEntry* newItems = (CustomerEntry*)realloc(
+                    g_customerList.items,
+                    (g_customerList.count + 1) * sizeof(CustomerEntry)
+                );
+
+                if (!newItems) {
+                    MessageBoxW(hwnd, L"Memory allocation failed!", L"Error", MB_OK);
+                    return 0;
+                }
+
+                g_customerList.items = newItems;
+
+                wcscpy_s(g_customerList.items[g_customerList.count].name, 256, Namebuffer);
+                wcscpy_s(g_customerList.items[g_customerList.count].poNumber, 64, poBuffer);
+
+                g_customerList.count++;
+
+                RefreshListBox(hListBox);
+
+                SetWindowTextW(hNameEdit, L"");
+                SetWindowTextW(hPOEdit, L"");
+
+                SetFocus(hNameEdit);
+            }
+
+        }
+        break;
+    }
+    
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        break;
+
+    case WM_DESTROY:
+
+        EnableWindow(hPopupWnd, TRUE);
+
+        break;
+
+    default:
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    return 0;
+}
+
+void OpenCustomerPopup(HWND parent) {
+
+    WNDCLASSW wc = { 0 };
+    wc.lpfnWndProc = CustomerPopupProc;
+    wc.hInstance = g_hInstance;
+    wc.lpszClassName = L"CustomerPopupClass";
+    RegisterClassW(&wc);
+    
+    int width = 550;
+    int height = 450;
+
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+    int x = (screenWidth - width) / 2;
+    int y = (screenHeight - height) / 2;
+
+    HWND hwnd = CreateWindowExW(
+        WS_EX_APPWINDOW | WS_EX_CONTROLPARENT,
+        L"CustomerPopupClass",
+        L"Customer List",
+        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_MINIMIZEBOX,
+        x, y, width, height,
+        parent,
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+    if (!hwnd) {
+        MessageBoxW(parent, L"Failed to create popup!", L"Error", MB_OK);
+        return;
+    }
+
+    g_customerPopup = hwnd;
+
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+
+    int marginLeft = 20;
+    int labelWidth = 80;
+    int editWidth = 200;
+    int rowHeight = 25;
+    int spacingY = 10; 
+    int yName = 20;
+    int yPO = yName + rowHeight + spacingY;
+    int yList = yPO + rowHeight + 20;
+
+
+    CreateWindowW(
+        L"STATIC",
+        L"Name:",
+        WS_CHILD | WS_VISIBLE,
+        marginLeft, yName,
+        labelWidth, rowHeight,
+        hwnd,
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+    hNameEdit = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"EDIT",
+        L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
+        marginLeft + labelWidth, yName,
+        editWidth, rowHeight,
+        hwnd,
+        (HMENU)IDC_NAME_EDIT,
+        g_hInstance,
+        NULL
+    );
+
+    CreateWindowW(
+        L"STATIC",
+        L"PO:",
+        WS_CHILD | WS_VISIBLE,
+        marginLeft, yPO,
+        labelWidth, rowHeight,
+        hwnd,
+        NULL,
+        g_hInstance,
+        NULL
+    );
+
+    hPOEdit = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"EDIT",
+        L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
+        marginLeft + labelWidth, yPO,
+        editWidth, rowHeight,
+        hwnd,
+        (HMENU)IDC_PO_EDIT,
+        g_hInstance,
+        NULL
+    );
+
+    CreateWindowW(
+        L"BUTTON",
+        L"Add",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+        marginLeft + labelWidth + editWidth + 10, yPO,
+        80, rowHeight,
+        hwnd,
+        (HMENU)IDC_ADD_LISTBOX,
+        g_hInstance,
+        NULL
+    );
+
+    CreateWindowW(
+        L"BUTTON",
+        L"Remove",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+        marginLeft + labelWidth + editWidth + 10, yName,
+        80, rowHeight,
+        hwnd,
+        (HMENU)IDC_REMOVE_LISTBOX,
+        g_hInstance,
+        NULL
+    );
+
+    CreateWindowW(
+        L"BUTTON",
+        L"Close",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+        marginLeft + labelWidth + editWidth + 10, 350, 
+        80, rowHeight,
+        hwnd,
+        (HMENU)IDC_CLOSE_LISTBOX, 
+        g_hInstance,
+        NULL
+    );
+
+    hListBox = CreateWindowW(
+        L"LISTBOX",
+        NULL,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+        marginLeft, yList,
+        labelWidth + editWidth + 90, 200,
+        hwnd,
+        (HMENU)IDC_LISTBOX,
+        g_hInstance,
+        NULL
+    );
+
+
+    if (g_customerList.count > 0) {
+        RefreshListBox(hListBox);
+    }
+  
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
+    
+    SetFocus(hNameEdit);
+
+    EnableWindow(parent, FALSE);
+
+
+}
+
+
+
+void ParseListItem(const wchar_t* input, wchar_t* nameOut, int* idOut)
+{
+    const wchar_t* separator = wcschr(input, L'|');
+
+    if (!separator)
+    {
+        wcscpy_s(nameOut, 256, input);
+        *idOut = -1;
+        return;
+    }
+
+    int nameLen = (int)(separator - input);
+    wcsncpy_s(nameOut, 256, input, nameLen);
+
+    *idOut = _wtoi(separator + 1);
+}
+
+
+
+
+void SaveToJson(const wchar_t* date, const wchar_t* path)
+{
+    FILE* file;
+
+    wchar_t fullpath[MAX_PATH];
+    wcscpy_s(fullpath, 256, path);
+
+    PathRemoveFileSpecW(fullpath);
+    wcscat_s(fullpath, MAX_PATH, L"\\List.json");
+
+
+    errno_t err = _wfopen_s(&file, fullpath, L"a, ccs=UTF-8");
+
+    if (err != 0 || !file)
+    {
+        wchar_t buf[256];
+        swprintf_s(buf, 256, L"Open failed! errno: %d", err);
+        MessageBoxW(NULL, buf, L"Error", MB_OK);
+        return;
+    }
+ 
+    for (int i = 0; i < g_customerList.count; i++)
+    {
+        fwprintf(file,
+            L"{\"date\":\"%s\",\"name\":\"%s\",\"id\":\"%s\"}\n",
+            date,
+            g_customerList.items[i].name,
+            g_customerList.items[i].poNumber
+        );
+    }
+
+    fclose(file);
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1080,8 +1552,124 @@ void LoadNewPDF(const wchar_t* newPath)
 
 
 
+void AddFound(FOUND_LIST* list, const wchar_t* path)
+{
+    if (list->count >= MAX_RESULTS)
+        return;
+
+    wcscpy_s(list->items[list->count].fullPath, MAX_PATH, path);
+    list->count++;
+}
 
 
+wchar_t seenDates[256][64];
+int seenCount = 0;
+
+BOOL AlreadySeen(wchar_t seenDates[][64], int count, const wchar_t* date)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (_wcsicmp(seenDates[i], date) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+
+
+
+
+
+
+
+BOOL ExtractJsonValue(const wchar_t* line, const wchar_t* key, wchar_t* out, int outSize)
+{
+    wchar_t pattern[64];
+    swprintf_s(pattern, 64, L"\"%s\":\"", key);
+
+    wchar_t* start = wcsstr(line, pattern);
+    if (!start) return FALSE;
+
+    start += wcslen(pattern);
+
+    wchar_t* end = wcschr(start, L'"');
+    if (!end) return FALSE;
+
+    int len = (int)(end - start);
+    if (len >= outSize) len = outSize - 1;
+
+    wcsncpy_s(out, outSize, start, len);
+    out[len] = 0;
+
+    return TRUE;
+}
+
+
+
+
+void SearchJson(const wchar_t* folderPath, TAB_DATA* tab, FOUND_LIST* results)
+{
+    wchar_t jsonPath[MAX_PATH];
+    swprintf_s(jsonPath, MAX_PATH, L"%s\\List.json", folderPath);
+
+    FILE* file;
+    if (_wfopen_s(&file, jsonPath, L"r, ccs=UTF-8") != 0 || !file)
+    {
+        MessageBox(NULL, L"Could not open List.json", L"Error", MB_OK);
+        return;
+    }
+
+    wchar_t line[512];
+
+    while (fgetws(line, 512, file))
+    {
+        wchar_t name[256] = L"";
+        wchar_t date[256] = L"";
+        wchar_t id[256] = L"";
+
+        ExtractJsonValue(line, L"name", name, 256);
+        ExtractJsonValue(line, L"date", date, 256);
+        ExtractJsonValue(line, L"id", id, 256);
+
+        for (int i = 0; i < tab->fieldCount; i++)
+        {
+            wchar_t text[256];
+            FIELD_DATA* f = &tab->fields[i];
+            if (!f->hControl) continue;
+
+            GetWindowTextW(f->hControl, text, 256);
+
+            if (FilenameContains(name, text) || FilenameContains(id, text))
+            {
+
+                if (AlreadySeen(seenDates, seenCount, date))
+                    break;
+
+
+                wchar_t fullPath[MAX_PATH];
+
+                swprintf_s(fullPath, MAX_PATH, L"%s\\%s.pdf", folderPath, date);
+
+                if (GetFileAttributesW(fullPath) != INVALID_FILE_ATTRIBUTES)
+                {
+                    AddFound(results, fullPath);
+
+                    wcscpy_s(seenDates[seenCount], 64, date);
+                    seenCount++;
+                }
+                else {
+                    MessageBox(g_pdfFrame, L"Could not find file", L"Error", MB_ICONERROR);
+                }
+
+                break;
+            }
+        }
+
+
+    }
+
+    fclose(file);
+}
 
 
 
@@ -1102,14 +1690,6 @@ BOOL FilenameContains(const wchar_t* filename, const wchar_t* text)
     return wcsstr(f, t) != NULL;
 }
 
-void AddFound(FOUND_LIST* list, const wchar_t* path)
-{
-    if (list->count >= MAX_RESULTS)
-        return;
-
-    wcscpy_s(list->items[list->count].fullPath, MAX_PATH, path);
-    list->count++;
-}
 
 void SearchFolder(
     const wchar_t* folderTemplate,
@@ -1172,10 +1752,10 @@ void SearchFolder(
     FindClose(hFind);
 }
 
-
 void SearchFolderRecursive(
     const wchar_t* folder,
-    TAB_DATA* tab,
+    FIELD_VALUE* fieldValues,
+    int fieldCount,
     FOUND_LIST* results
 )
 {
@@ -1185,8 +1765,11 @@ void SearchFolderRecursive(
     WIN32_FIND_DATAW fd;
     HANDLE hFind = FindFirstFileW(pattern, &fd);
 
-    if (hFind == INVALID_HANDLE_VALUE)
+
+    if (hFind == INVALID_HANDLE_VALUE) {
+        MessageBox(NULL, pattern, L"No file found", MB_OK);
         return;
+    }
 
     do
     {
@@ -1194,24 +1777,26 @@ void SearchFolderRecursive(
             wcscmp(fd.cFileName, L"..") == 0)
             continue;
 
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            continue;
+
         wchar_t fullPath[MAX_PATH];
         swprintf_s(fullPath, MAX_PATH, L"%s\\%s", folder, fd.cFileName);
 
+
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            SearchFolderRecursive(fullPath, tab, results);
+            SearchFolderRecursive(fullPath, fieldValues, fieldCount, results);
         }
         else
         {
-            for (int i = 0; i < tab->fieldCount; i++)
+            for (int i = 0; i < fieldCount; i++)
             {
-                wchar_t text[256];
-                FIELD_DATA* f = &tab->fields[i];
-                if (!f->hControl) continue;
+                if (wcslen(fieldValues[i].value) == 0)
+                    continue;
 
-                GetWindowTextW(f->hControl, text, 256);
 
-                if (FilenameContains(fd.cFileName, text))
+                if (FilenameContains(fd.cFileName, fieldValues[i].value))
                 {
                     AddFound(results, fullPath);
                     break;
@@ -1221,14 +1806,41 @@ void SearchFolderRecursive(
 
     } while (FindNextFileW(hFind, &fd));
 
+
     FindClose(hFind);
 }
-
-
 
 void SearchFromIniPaths(int currentPage, FOUND_LIST* results, TAB_DATA* tabs)
 {
     TAB_DATA* tab = &tabs[currentPage];
+
+
+    FIELD_VALUE fieldValues[64];
+    int fieldCount = 0;
+
+    for (int i = 0; i < tab->fieldCount; i++) {
+        FIELD_DATA* f = &tab->fields[i];
+        if (!f->hControl) continue;
+
+        wcscpy_s(fieldValues[fieldCount].label, 64, f->label);
+        GetWindowTextW(f->hControl, fieldValues[fieldCount].value, 256);
+        fieldCount++;
+    }
+
+
+    wchar_t jsonFlag[8];
+    GetPrivateProfileStringW(
+        tab->iniSection,
+        L"JsonSearch",
+        L"false",
+        jsonFlag,
+        8,
+        INI_SEARCH
+    );
+
+    BOOL useJsonSearch = (_wcsicmp(jsonFlag, L"true") == 0);
+
+
 
     for (int p = 0; p < 10; p++) {
 
@@ -1248,14 +1860,29 @@ void SearchFromIniPaths(int currentPage, FOUND_LIST* results, TAB_DATA* tabs)
         if (!folder[0])
             break;
 
+        wchar_t expandedFolder[512];
+        ExpandTemplate(folder, expandedFolder, 512, fieldValues, fieldCount);
 
 
-        if (tab->searchRecursive) {
-            SearchFolderRecursive(folder, tab, results);
+
+        if (useJsonSearch)
+        {
+            SearchJson(expandedFolder, tab, results);
         }
-        else {
-            SearchFolder(folder, tab, results);
+        else
+        {
+            if (tab->searchRecursive)
+            {
+                SearchFolderRecursive(expandedFolder, fieldValues, fieldCount, results);
+            }
+            else
+            {
+                SearchFolder(expandedFolder, tab, results);
+            }
         }
+
+
+
     }
 }
 
@@ -1373,24 +2000,18 @@ void DestroyActiveFields(void) {
     activeFieldCount = 0;
 }
 
-
-void DestroyTabSaveButton(TAB_DATA* tab, int pageCount)
+void DestroyTabButtons(TAB_DATA* tab)
 {
+    for (int i = 0; i < tab->buttonCount; i++)
+    {
+        BUTTON_DATA* b = &tab->buttons[i];
 
-    for (int i = 0; i < pageCount; i++) {
-        if (tab->hButton && IsWindow(tab->hButton))
+        if (b->hWnd && IsWindow(b->hWnd))
         {
-            DestroyWindow(tab->hButton);
-            tab->hButton = NULL;
-        }
-
-        if (tab->hButton && IsWindow(tab->hButton))
-        {
-            DestroyWindow(tab->hButton);
-            tab->hButton = NULL;
+            DestroyWindow(b->hWnd);
+            b->hWnd = NULL;
         }
     }
-    
 }
 
 FIELD_DATA* FindFieldByHwnd(HWND hCtrl, TAB_DATA* tabs, int tabCount) {
@@ -1446,33 +2067,47 @@ u_int LoadTabCount(LPCWSTR iniPath)
         iniPath
     );
 }
-
-bool LoadButtonData(const wchar_t* tabSection, BUTTON_DATA* b, LPCWSTR iniPath)
+bool LoadButtonsData(const wchar_t* tabSection, TAB_DATA* tab, LPCWSTR iniPath)
 {
-    if (!b) return false;
+    tab->buttonCount = GetPrivateProfileIntW(tabSection, L"ButtonCount", 0, iniPath);
 
-    b->x = GetPrivateProfileIntW(tabSection, L"Button.X", -1, iniPath);
-    b->y = GetPrivateProfileIntW(tabSection, L"Button.Y", -1, iniPath);
-
-    if (b->x < 0 || b->y < 0)
+    if (tab->buttonCount <= 0)
         return false;
 
-    b->width = GetPrivateProfileIntW(tabSection, L"Button.Width", 80, iniPath);
-    b->height = GetPrivateProfileIntW(tabSection, L"Button.Height", 25, iniPath);
+    for (int i = 0; i < tab->buttonCount; i++)
+    {
+        BUTTON_DATA* b = &tab->buttons[i];
+        wchar_t key[64];
 
-    GetPrivateProfileStringW(
-        tabSection,
-        L"Button.Text",
-        L"Save",
-        b->text,
-        64,
-        iniPath
-    );
+        swprintf(key, 64, L"Button%d.X", i);
+        b->x = GetPrivateProfileIntW(tabSection, key, -1, iniPath);
 
-    wcscpy_s(b->name, 64, L"SaveButton");
+        swprintf(key, 64, L"Button%d.Y", i);
+        b->y = GetPrivateProfileIntW(tabSection, key, -1, iniPath);
+
+        if (b->x < 0 || b->y < 0)
+            continue;
+
+        swprintf(key, 64, L"Button%d.Width", i);
+        b->width = GetPrivateProfileIntW(tabSection, key, 80, iniPath);
+
+        swprintf(key, 64, L"Button%d.Height", i);
+        b->height = GetPrivateProfileIntW(tabSection, key, 25, iniPath);
+
+        swprintf(key, 64, L"Button%d.Text", i);
+        GetPrivateProfileStringW(tabSection, key, L"Button", b->text, 64, iniPath);
+
+        wchar_t func[64];
+        swprintf(key, 64, L"Button%d.Function", i);
+        GetPrivateProfileStringW(tabSection, key, L"Save", func, 64, iniPath);
+
+        if (wcscmp(func, L"Save") == 0) b->function = BTN_SAVE;
+        else if (wcscmp(func, L"Search") == 0) b->function = BTN_SEARCH;
+        else if (wcscmp(func, L"OpenList") == 0) b->function = BTN_OPEN_LIST;
+    }
+
     return true;
 }
-
 
 
 
@@ -1518,11 +2153,11 @@ void LoadTabFields(int tabIndex, const wchar_t* section, LPCWSTR iniPath, TAB_DA
 {
     TAB_DATA* tab = &tabs[tabIndex];
 
-    tab->fieldCount =
-        GetPrivateProfileIntW(section, L"FieldCount", 0, iniPath);
+    tab->fieldCount = GetPrivateProfileIntW(section, L"FieldCount", 0, iniPath);
 
-    tab->searchRecursive = GetPrivateProfileIntW(section, L"SearchRecursive", 0, iniPath) != 0;
 
+    int val = GetPrivateProfileIntW(section, L"SearchRecursive", 0, iniPath);
+    tab->searchRecursive = val != 0;
 
 
     for (int f = 0; f < tab->fieldCount; f++)
@@ -1622,7 +2257,7 @@ void LoadTabsFromIni(HWND hTab, LPCWSTR iniPath, TAB_DATA* tabs, int* tabCount)
 
 
 
-void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showAddButtons)
+void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showAddButtons, BOOL showListboxButton)
 {
     DestroyActiveFields();
 
@@ -1737,6 +2372,23 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showA
                 SetWindowLongPtr(f->hButtonMinus, GWLP_USERDATA, (LONG_PTR)f);
 
 
+                if (showListboxButton) {
+                    f->hListboxButton = CreateWindowW(
+                        L"BUTTON",
+                        L"Add To List",
+                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                        drawX + drawWidth - btnWidth - spacing - btnWidth,
+                        drawY + 50,
+                        140,
+                        35,
+                        parent,
+                        (HMENU)IDC_SHOW_LISTBOX,
+                        g_hInstance,
+                        NULL
+                    );
+                }
+
+
             }
 
             f->hControl = CreateWindowW(
@@ -1771,42 +2423,41 @@ void CreateFieldsFromTab(HWND parent, TAB_DATA* tab, LPCWSTR iniPath, BOOL showA
         activeFieldCount++;
     }
 }
-
-
-void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, UINT btnID, TAB_DATA* tabs) {
+void CreateButtons(HWND parent, int pageIndex, LPCWSTR iniPath, TAB_DATA* tabs)
+{
     TAB_DATA* tab = &tabs[pageIndex];
 
-    if (tab->hButton && IsWindow(tab->hButton)) {
-        DestroyWindow(tab->hButton);
-        tab->hButton = NULL;
-    }
-
-    BUTTON_DATA btn;
-    if (!LoadButtonData(tab->iniSection, &btn, iniPath))
+    if (!LoadButtonsData(tab->iniSection, tab, iniPath))
         return;
 
     RECT rc;
     GetClientRect(parent, &rc);
     TabCtrl_AdjustRect(parent, FALSE, &rc);
 
-    int drawX = rc.left + btn.x;
-    int drawY = rc.top + btn.y;
+    for (int i = 0; i < tab->buttonCount; i++)
+    {
+        BUTTON_DATA* b = &tab->buttons[i];
 
-    tab->hButton = CreateWindowW(
-        L"BUTTON",
-        btn.text,
-        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
-        drawX, drawY,
-        btn.width, btn.height,
-        parent,
-        (HMENU)(INT_PTR)btnID,
-        g_hInstance,
-        NULL
-    );
+        int drawX = rc.left + b->x;
+        int drawY = rc.top + b->y;
+
+        b->id = 2000 + (pageIndex * 100) + i;
+
+        b->hWnd = CreateWindowW(
+            L"BUTTON",
+            b->text,
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+            drawX, drawY,
+            b->width, b->height,
+            parent,
+            (HMENU)(INT_PTR)b->id,
+            g_hInstance,
+            NULL
+        );
+    }
 
     tab->iniPath = iniPath;
 }
-
 
 
 
@@ -1878,25 +2529,32 @@ void ExpandTemplate(const wchar_t* input, wchar_t* output, size_t outSize, FIELD
 
 
 
+void SaveFile(int currentPage, TAB_DATA* tab)
+{
+    if (currentPage < 0 || currentPage >= SaveTabCount)
+        return;
 
 
-void SaveFile(int currentPage) {
-    if (currentPage < 0 || currentPage >= SaveTabCount) return;
 
-    TAB_DATA* tab = &SaveTabs[currentPage];
-
-    for (int i = 0; i < tab->fieldCount; i++) {
+    for (int i = 0; i < tab->fieldCount; i++)
+    {
         FIELD_DATA* f = &tab->fields[i];
-        if (f->controlType == FIELD_COMBO) {
+
+        if (f->controlType == FIELD_COMBO)
+        {
             int sel = (int)SendMessage(f->hControl, CB_GETCURSEL, 0, 0);
-            if (sel != CB_ERR) {
+
+            if (sel != CB_ERR)
+            {
                 SendMessage(f->hControl, CB_GETLBTEXT, sel, (LPARAM)f->lastComboValue);
 
-                int fieldIndex = (int)(f - &SaveTabs[g_CurrentPage].fields[0]);
+                int fieldIndex = i; 
+
                 wchar_t key[64];
                 swprintf_s(key, 64, L"Field%d.LastValue", fieldIndex);
+
                 WritePrivateProfileStringW(
-                    SaveTabs[g_CurrentPage].iniSection,
+                    tab->iniSection,
                     key,
                     f->lastComboValue,
                     INI_SAVE
@@ -1905,77 +2563,121 @@ void SaveFile(int currentPage) {
         }
     }
 
-
     FIELD_VALUE fieldValues[64];
     int fieldCount = 0;
-    for (int i = 0; i < tab->fieldCount; i++) {
+    wchar_t firstEditValue[256] = L"";
+    wchar_t fullPath[MAX_PATH] = L"";
+
+
+
+    for (int i = 0; i < tab->fieldCount && fieldCount < 64; i++)
+    {
         FIELD_DATA* f = &tab->fields[i];
         if (!f->hControl) continue;
 
         wcscpy_s(fieldValues[fieldCount].label, 64, f->label);
         GetWindowTextW(f->hControl, fieldValues[fieldCount].value, 256);
+
+        if (f->controlType == FIELD_EDIT && firstEditValue[0] == L'\0')
+        {
+            wcscpy_s(firstEditValue, 256, fieldValues[fieldCount].value);
+        }
+
         fieldCount++;
     }
 
+
     wchar_t oldFile[MAX_PATH];
     swprintf_s(oldFile, MAX_PATH, L"C:\\watchFolder\\%s", g_CurrentFilename);
-    if (GetFileAttributesW(oldFile) == INVALID_FILE_ATTRIBUTES) {
+
+    if (GetFileAttributesW(oldFile) == INVALID_FILE_ATTRIBUTES)
+    {
         MessageBox(NULL, L"Source file not found!", L"Error", MB_OK | MB_ICONERROR | MB_TOPMOST);
         return;
     }
 
     wchar_t filePattern[256], finalFile[256];
+
     GetPrivateProfileStringW(tab->iniSection, L"SavedFileName", L"", filePattern, 256, INI_SAVE);
-    if (filePattern[0] == 0) {
+
+    if (filePattern[0] == 0)
+    {
         MessageBox(NULL, L"No SavedFileName defined!", L"Error", MB_OK | MB_ICONERROR | MB_TOPMOST);
         return;
     }
+
     ExpandTemplate(filePattern, finalFile, 256, fieldValues, fieldCount);
     SanitizeFilename(finalFile);
 
-    for (int pnum = 1; pnum <= 10; pnum++) {
-        wchar_t pathKey[32], folderTemplate[512], expandedFolder[512];
+    BOOL copiedAtLeastOnce = FALSE;
+
+    for (int pnum = 1; pnum <= 10; pnum++)
+    {
+        wchar_t pathKey[32];
+        wchar_t folderTemplate[512];
+        wchar_t expandedFolder[512];
+
         swprintf_s(pathKey, 32, L"Path%d", pnum);
+
         GetPrivateProfileStringW(tab->iniSection, pathKey, L"", folderTemplate, 512, INI_SAVE);
-        if (folderTemplate[0] == 0) break;
+
+        if (folderTemplate[0] == 0)
+            break;
 
         ExpandTemplate(folderTemplate, expandedFolder, 512, fieldValues, fieldCount);
 
-
-        if (expandedFolder[wcslen(expandedFolder) - 1] != L'\\')
+        size_t len = wcslen(expandedFolder);
+        if (len > 0 && expandedFolder[len - 1] != L'\\')
+        {
             wcscat_s(expandedFolder, 512, L"\\");
+        }
 
         wchar_t tempPath[MAX_PATH] = L"";
-        for (size_t j = 0; j < wcslen(expandedFolder); j++) {
+        size_t folderLen = wcslen(expandedFolder);
+
+        for (size_t j = 0; j < folderLen; j++)
+        {
             tempPath[j] = expandedFolder[j];
             tempPath[j + 1] = 0;
-            if (expandedFolder[j] == L'\\') {
+
+            if (expandedFolder[j] == L'\\')
+            {
                 if (GetFileAttributesW(tempPath) == INVALID_FILE_ATTRIBUTES)
+                {
                     CreateDirectoryW(tempPath, NULL);
+                }
             }
         }
 
-        wchar_t fullPath[MAX_PATH];
         swprintf_s(fullPath, MAX_PATH, L"%s%s", expandedFolder, finalFile);
 
         MakeUniqueFilename(fullPath, fullPath);
 
-
-        if (!CopyFileW(oldFile, fullPath, FALSE)) {
+        if (CopyFileW(oldFile, fullPath, FALSE))
+        {
+            copiedAtLeastOnce = TRUE;
+            SaveLastPath(oldFile, fullPath, INI_SAVE);
+        }
+        else
+        {
             DWORD err = GetLastError();
+
             wchar_t buf[512];
             swprintf_s(buf, 512, L"Failed to copy file to:\n%ls\nError %lu", fullPath, err);
+
             MessageBox(NULL, buf, L"Error", MB_OK | MB_ICONERROR | MB_TOPMOST);
-        }
-        else {
-            SaveLastPath(oldFile, fullPath, INI_SAVE);
-            MessageBox(NULL, L"File Saved Successfully!", L"Success", MB_OK | MB_TOPMOST);
         }
     }
 
-    DeleteFileW(oldFile);
-}
+    if (copiedAtLeastOnce)
+    {
 
+        SaveToJson(firstEditValue, fullPath);
+
+        DeleteFileW(oldFile);
+        MessageBox(NULL, L"File Saved Successfully!", L"Success", MB_OK | MB_TOPMOST);
+    }
+}
 
 
 
@@ -2015,7 +2717,7 @@ bool IsFileSendReady(int currentPage) {
 }
 
 
-
+static int g_currentPageGuide = -1;
 
 void SetPage(
     HWND hTab,
@@ -2026,23 +2728,32 @@ void SetPage(
     LPCWSTR iniPath,
     int buttonId,
     bool showAddButtons
-)
+    )
 {
     if (newPage < 0 || newPage >= pageCount)
         return;
 
+    if (g_currentPageGuide != -1)
+    {
+        DestroyTabButtons(&tabs[g_currentPageGuide]);
+    }
+
     TabCtrl_SetCurSel(hTab, newPage);
 
     DestroyActiveFields();
-    DestroyTabSaveButton(tabs, pageCount);
 
-    CreateFieldsFromTab(hwndParent, &tabs[newPage], iniPath, showAddButtons);
-    CreateButtons(hwndParent, newPage, iniPath, buttonId, tabs);
+    BOOL showListboxButton = 0;
+
+    CreateFieldsFromTab(hwndParent, &tabs[newPage], iniPath, showAddButtons, showListboxButton);
+    CreateButtons(hwndParent, newPage, iniPath, tabs);
 
     TAB_DATA* tab = &tabs[newPage];
 
     for (int i = 0; i < tab->fieldCount; i++)
         PopulateControlData(&tab->fields[i], iniPath);
+
+    g_currentPageGuide = newPage;
+
 }
 
 
@@ -2363,7 +3074,14 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         {
             HWND current = GetFocus();
 
+            if (!current)
+                current = hwnd;
+
             HWND root = GetAncestor(current, GA_ROOT);
+
+            if (!root)
+                root = hwnd;
+
             BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
 
 
@@ -2379,6 +3097,9 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         if (wParam == VK_RETURN)
         {
             HWND focused = GetFocus();
+
+            if (!focused)
+                focused = hwnd;
 
             int activeTab = TabCtrl_GetCurSel(hSearchTab);
 
@@ -2405,62 +3126,96 @@ LRESULT CALLBACK SearchWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         int id = LOWORD(wParam);
         int code = HIWORD(wParam);
 
-        switch (id)
+
+
+
+        TAB_DATA* tab = &SearchTabs[g_CurrentPage];
+
+        for (int i = 0; i < tab->buttonCount; i++)
         {
-        case IDC_SEARCH_BUTTON:
-        {
-            if (id == IDC_SEARCH_BUTTON)
+            BUTTON_DATA* b = &tab->buttons[i];
+
+
+            if (id == b->id)
             {
-
-                ClearSearchResults();
-
-             
-
-
-                int activeTab = TabCtrl_GetCurSel(hSearchTab);
-
-                FindFilesFromTab(activeTab, SearchTabs);
-
-                ClearTabFields(activeTab, SearchTabs);
-
-
-                WCHAR searchCountText[64];
-
-                if (!foundResults || foundResults->count == 0)
+                switch (b->function)
                 {
-                    g_CurrentResultIndex = -1;
+                case BTN_SAVE:
 
-                    swprintf_s(searchCountText, 64, L"Result   0 / 0");
+
+                    break;
+
+                case BTN_SEARCH:
+
+
+                    
+
+
+
+                    ClearSearchResults();
+
+
+
+
+                    int activeTab = TabCtrl_GetCurSel(hSearchTab);
+
+                    FindFilesFromTab(activeTab, SearchTabs);
+
+                    ClearTabFields(activeTab, SearchTabs);
+
+
+                    WCHAR searchCountText[64];
+
+                    if (!foundResults || foundResults->count == 0)
+                    {
+                        g_CurrentResultIndex = -1;
+
+                        swprintf_s(searchCountText, 64, L"Result   0 / 0");
+                    }
+                    else
+                    {
+                        if (g_CurrentResultIndex < 0)
+                            g_CurrentResultIndex = 0;
+
+                        swprintf_s(searchCountText, 64, L"Result   %d / %d",
+                            g_CurrentResultIndex + 1,
+                            foundResults->count);
+                    }
+
+                    SetWindowTextW(hSearchCountLabel, searchCountText);
+
+
+                    WCHAR pageText[64];
+                    swprintf_s(pageText, 64, L"Page   %d / %d", current_pdf_page + 1, total_pages);
+                    SetWindowTextW(hPageLabel, pageText);
+
+
+
+                    FIELD_DATA* field = &SearchTabs[activeTab].fields[0];
+                    if (field->controlType == FIELD_EDIT && field->hControl)
+                    {
+                        SetFocus(field->hControl);
+                    }
+
+                    break;
+
+                case BTN_OPEN_LIST:
+                    break;
                 }
-                else
-                {
-                    if (g_CurrentResultIndex < 0)
-                        g_CurrentResultIndex = 0;
-
-                    swprintf_s(searchCountText, 64, L"Result   %d / %d",
-                        g_CurrentResultIndex + 1,
-                        foundResults->count);
-                }
-
-                SetWindowTextW(hSearchCountLabel, searchCountText);
-
-
-                WCHAR pageText[64];
-                swprintf_s(pageText, 64, L"Page   %d / %d", current_pdf_page + 1, total_pages);
-                SetWindowTextW(hPageLabel, pageText);
-
-
-
-                FIELD_DATA* field = &SearchTabs[activeTab].fields[0];
-                if (field->controlType == FIELD_EDIT && field->hControl)
-                {
-                    SetFocus(field->hControl);
-                }
-
                 return 0;
             }
-            break;
         }
+
+
+
+
+
+
+
+
+
+        switch (id)
+        {
 
         case CBN_SELCHANGE:
         {
@@ -2525,6 +3280,9 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         DestroyWindow(hwnd);
         break;
     case WM_DESTROY:
+        free(g_customerList.items);
+        g_customerList.items = NULL;
+        g_customerList.count = 0;
         hPopupWnd = NULL;
         break;
 
@@ -2535,17 +3293,25 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             HWND current = GetFocus();
 
-            HWND root = GetAncestor(current, GA_ROOT);
+            if (!current)
+                current = hwnd;
+
 
             BOOL backwards = (GetKeyState(VK_SHIFT) & 0x8000);
 
-            HWND next = GetNextDlgTabItem(root, current, backwards);
+            HWND next = GetNextDlgTabItem(hwnd, current, backwards);
 
             if (next)
                 SetFocus(next);
 
             return 0;
         }
+
+        else
+        {
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
+
 
     }
 
@@ -2566,6 +3332,44 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
 
         int id = LOWORD(wParam);
+
+
+
+        TAB_DATA* tab = &SaveTabs[g_CurrentPage];
+
+        for (int i = 0; i < tab->buttonCount; i++)
+        {
+            BUTTON_DATA* b = &tab->buttons[i];
+
+
+            if (id == b->id)
+            {
+                switch (b->function)
+                {
+                case BTN_SAVE:
+
+
+                    SaveFile(currentPage, tab);
+
+
+                    DestroyWindow(hwnd);
+
+
+                    break;
+
+                case BTN_SEARCH:
+                    break;
+
+                case BTN_OPEN_LIST:
+                    OpenCustomerPopup(hwnd);
+                    break;
+                }
+                return 0;
+            }
+        }
+
+
+
 
         if (id >= 3500 && id < 3540)
         {
@@ -2651,19 +3455,6 @@ LRESULT CALLBACK PopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
         }
 
-        case IDC_SAVE_BUTTON:
-
-
-
-
-
-            SaveFile(currentPage);
-
-
-            DestroyWindow(hwnd);
-
-
-            break;
         default:;
         }
         break;
@@ -3005,6 +3796,9 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
     if (hPopupWnd && IsWindow(hPopupWnd))
         return hPopupWnd;
 
+    g_CurrentPage = 0;
+    g_currentPageGuide = -1;
+
 
     const wchar_t CLASS_NAME[] = L"PopupWindowClass";
 
@@ -3057,7 +3851,7 @@ HWND OpenPopupWindow(HWND hwndParent, LPCWSTR text) {
 
 
     LoadTabsFromIni(hPopupTab, INI_SAVE, SaveTabs, &SaveTabCount);
-    SetPage(hPopupTab, hPopupWnd, SaveTabs, SaveTabCount, 0, INI_SAVE, IDC_SAVE_BUTTON, TRUE);
+    SetPage(hPopupTab, hPopupWnd, SaveTabs, SaveTabCount, 0, INI_SAVE, IDC_SAVE_BUTTON, FALSE);
 
 
 
@@ -3213,8 +4007,6 @@ LRESULT CALLBACK ToolbarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 255, 255));
-        //RECT centerRect = rect;
-        //DrawText(hdc, current_opened_pdf, -1, &centerRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         SetWindowTextW(hFileNameText, current_opened_pdf);
         LayoutCustomerNav(hwnd);
@@ -3430,6 +4222,8 @@ HWND OpenSearchWindow(HWND hwndParent) {
         return g_pdfFrame;
     }
 
+    g_CurrentPage = 0;
+
 
     const wchar_t CLASS_NAME[] = L"Search Menu";
 
@@ -3473,6 +4267,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
         return NULL;
 
     g_pdfFrame = hwnd;
+
 
 
 
@@ -3954,11 +4749,21 @@ int WINAPI WinMain(
     while (GetMessage(&msg, NULL, 0, 0))
     {
 
+        if (g_customerPopup && IsDialogMessage(g_customerPopup, &msg))
+            continue;
+
+
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_TAB)
         {
             HWND focused = GetFocus();
 
+            if (!focused)
+                focused = hwnd;
+
             HWND root = NULL;
+
+            if (!root)
+                root = hwnd;
 
             if (g_pdfFrame && IsWindow(g_pdfFrame))
                 root = g_pdfFrame;
