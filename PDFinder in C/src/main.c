@@ -1,7 +1,6 @@
 #define UNICODE
 
 
-
 #include "../resources.h"
 #include "PDF Parser.h"
 
@@ -4364,7 +4363,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
     hPrintButton = CreateWindowW(
         L"BUTTON",
         NULL,
-        WS_CHILD | WS_VISIBLE | BS_ICON | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | BS_ICON,
         120, 8, 30, 30,
         hToolbar,
         (HMENU)IDC_PRINT_BUTTON,
@@ -4372,6 +4371,15 @@ HWND OpenSearchWindow(HWND hwndParent) {
         NULL
     );
 
+
+    HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1));
+
+    if (!hIcon)
+    {
+        MessageBox(NULL, L"Failed to load icon", L"Error", MB_OK);
+    }
+
+    SendMessage(hPrintButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)hIcon);
 
     hPageLabel = CreateWindowW(
         L"STATIC",
