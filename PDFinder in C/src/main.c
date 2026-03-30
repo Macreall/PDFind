@@ -1213,14 +1213,54 @@ void PrintCurrentPDF(HWND hwnd)
 
     int copies = GetDlgItemInt(hOptionsPanel, IDC_COPIES_EDIT, NULL, FALSE);
 
-    int startPage = GetDlgItemInt(hOptionsPanel, IDC_START_PAGE, NULL, FALSE);
-    int endPage = GetDlgItemInt(hOptionsPanel, IDC_END_PAGE, NULL, FALSE);
 
     
     BOOL allPages = settings->allPages;
 
-    int start = allPages ? 0 : max(0, startPage - 1);
-    int end = allPages ? total_pages : min(total_pages, endPage);
+    BOOL startValid = FALSE;
+    BOOL endValid = FALSE;
+
+    int startPage = GetDlgItemInt(hOptionsPanel, IDC_START_PAGE, &startValid, FALSE);
+    int endPage = GetDlgItemInt(hOptionsPanel, IDC_END_PAGE, &endValid, FALSE);
+
+
+
+    int start, end;
+
+    if (allPages)
+    {
+        start = 0;
+        end = total_pages;
+    }
+    else
+    {
+        if (startValid && endValid)
+        {
+            start = max(0, startPage - 1);
+            end = min(total_pages, endPage);
+        }
+        else if (startValid && !endValid)
+        {
+            start = max(0, startPage - 1);
+            end = total_pages;
+        }
+        else if (!startValid && endValid)
+        {
+            start = 0;
+            end = min(total_pages, endPage);
+        }
+        else
+        {
+            start = 0;
+            end = total_pages;
+        }
+    }
+
+    if (start >= end)
+    {
+        MessageBox(hwnd, L"Invalid page range", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
 
 
     HDC hdcPrinter = CreateDCW(L"WINSPOOL", printerName, NULL, NULL);
@@ -1237,7 +1277,6 @@ void PrintCurrentPDF(HWND hwnd)
     if (StartDocW(hdcPrinter, &di) <= 0)
     {
         DeleteDC(hdcPrinter);
-        MessageBox(hwnd, L"StartDoc failed", L"Error", MB_OK);
         return;
     }
 
@@ -1267,17 +1306,35 @@ void PrintCurrentPDF(HWND hwnd)
 
             float pageW = bounds.x1 - bounds.x0;
             float pageH = bounds.y1 - bounds.y0;
+
+
             float scaleX = (float)printableWidth / pageW;
             float scaleY = (float)printableHeight / pageH;
 
             float scale = min(scaleX, scaleY);
 
 
-            fz_matrix ctm = fz_translate(-bounds.x0, -bounds.y0);
+
+            float dpi = (float)GetDeviceCaps(hdcPrinter, LOGPIXELSX);
+            float zoom = dpi / 72.0f;
+
+            float qualityBoost = 1.5f;
+
+            fz_matrix ctm = fz_scale(zoom * qualityBoost, zoom * qualityBoost);
+
+            ctm = fz_translate(-bounds.x0, -bounds.y0);
+
+
+
+
+
 
             fz_rect r = fz_transform_rect(bounds, ctm);
             fz_irect bbox = fz_round_rect(r);
             fz_pixmap* pix = fz_new_pixmap_with_bbox(pdf_ctx, fz_device_rgb(pdf_ctx), bbox, NULL, 1);
+
+
+
             fz_clear_pixmap_with_value(pdf_ctx, pix, 255);
 
             fz_device* dev = fz_new_draw_device(pdf_ctx, ctm, pix);
@@ -1288,6 +1345,9 @@ void PrintCurrentPDF(HWND hwnd)
             int w = fz_pixmap_width(pdf_ctx, pix);
             int h = fz_pixmap_height(pdf_ctx, pix);
 
+            //int offsetX = (printableWidth - w) / 2;
+            //int offsetY = (printableHeight - h) / 2;
+
             BITMAPINFO bmi = { 0 };
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
             bmi.bmiHeader.biWidth = w;
@@ -1296,10 +1356,7 @@ void PrintCurrentPDF(HWND hwnd)
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
 
-            
-
-            int offsetX = (printableWidth - w) / 2;
-            int offsetY = (printableHeight - h) / 2;
+        
 
             StretchDIBits(
                 hdcPrinter,
@@ -3574,6 +3631,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 
 
+
         hCombo = CreateWindow(
             L"COMBOBOX",
             NULL,
@@ -3596,7 +3654,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         CreateWindowW(
             L"STATIC",
             L"Copies:",
-            WS_CHILD | WS_VISIBLE,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             20, 60, 80, 20,
             hOptionsPanel,
             NULL,
@@ -3607,7 +3665,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         hCopiesEdit = CreateWindowW(
             L"EDIT",
             L"1",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | WS_TABSTOP,
             100, 60, 60, 22,
             hOptionsPanel,
             (HMENU)IDC_COPIES_EDIT,
@@ -3619,7 +3677,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         hAllPagesRadio = CreateWindowW(
             L"BUTTON",
             L"All Pages",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
+            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
             20, 100, 120, 20,
             hOptionsPanel,
             (HMENU)IDC_ALL_PAGES,
@@ -3630,7 +3688,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         hCustomPagesRadio = CreateWindowW(
             L"BUTTON",
             L"Custom Pages",
-            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
             20, 130, 120, 20,
             hOptionsPanel,
             (HMENU)IDC_CUSTOM_PAGES,
@@ -3656,8 +3714,8 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         hStartPageEdit = CreateWindowW(
             L"EDIT",
-            L"1",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+            L"",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | WS_TABSTOP,
             80, 190, 50, 22,
             hOptionsPanel,
             (HMENU)IDC_START_PAGE,
@@ -3680,8 +3738,8 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         hEndPageEdit = CreateWindowW(
             L"EDIT",
-            L"1",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+            L"",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | WS_TABSTOP,
             80, 220, 50, 22,
             hOptionsPanel,
             (HMENU)IDC_END_PAGE,
@@ -3690,11 +3748,22 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         );
 
 
+        CreateWindowW(
+            L"BUTTON",
+            L"Cancel",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP | WS_TABSTOP,
+            60, 510, 80, 30,
+            hOptionsPanel,
+            (HMENU)IDC_CANCEL_PDF,
+            GetModuleHandle(NULL),
+            NULL
+        );
+
         // Print Button
         CreateWindowW(
             L"BUTTON",
             L"Print",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP | WS_TABSTOP,
             160, 510, 80, 30,
             hOptionsPanel,
             (HMENU)IDC_PRINT_PDF,
@@ -3702,16 +3771,7 @@ LRESULT CALLBACK PrintWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             NULL
         );
 
-        CreateWindowW(
-            L"BUTTON",
-            L"Cancel",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-            60, 510, 80, 30,
-            hOptionsPanel,
-            (HMENU)IDC_CANCEL_PDF,
-            GetModuleHandle(NULL),
-            NULL
-        );
+       
 
 
 
@@ -4362,9 +4422,9 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
     hPrintButton = CreateWindowW(
         L"BUTTON",
-        NULL,
-        WS_CHILD | WS_VISIBLE | BS_ICON,
-        120, 8, 30, 30,
+        L"Print",
+        WS_CHILD | WS_VISIBLE | BS_ICON | BS_OWNERDRAW,
+        120, 8, 50, 30,
         hToolbar,
         (HMENU)IDC_PRINT_BUTTON,
         g_hInstance,
@@ -4372,14 +4432,14 @@ HWND OpenSearchWindow(HWND hwndParent) {
     );
 
 
-    HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1));
+    //HICON hIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON1));
 
-    if (!hIcon)
-    {
-        MessageBox(NULL, L"Failed to load icon", L"Error", MB_OK);
-    }
+    //if (!hIcon)
+    //{
+    //    MessageBox(NULL, L"Failed to load icon", L"Error", MB_OK);
+    //}
 
-    SendMessage(hPrintButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)hIcon);
+    //SendMessage(hPrintButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)hIcon);
 
     hPageLabel = CreateWindowW(
         L"STATIC",
@@ -4503,7 +4563,7 @@ HWND OpenPrintWindow(HWND hwndParent) {
 
 
     HWND hwnd = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
+        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
         CLASS_NAME,
         L"Print",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
@@ -4758,6 +4818,9 @@ int WINAPI WinMain(
     {
 
         if (g_customerPopup && IsDialogMessage(g_customerPopup, &msg))
+            continue;
+
+        if (g_PrintFrame && IsDialogMessage(g_PrintFrame, &msg))
             continue;
 
 
