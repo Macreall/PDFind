@@ -17,6 +17,9 @@ LPCWSTR INI_SAVE = L"C:\\watchFolder\\save_settings.ini";
 LPCWSTR INI_SEARCH = L"C:\\watchFolder\\search_settings.ini";
 
 
+
+
+
 HWND g_PrintFrame = NULL;
 HWND hOptionsPanel;
 HWND hPreviewFrame;
@@ -1945,6 +1948,10 @@ void SearchFromIniPaths(int currentPage, FOUND_LIST* results, TAB_DATA* tabs)
 
 void FindFilesFromTab(int currentPage, TAB_DATA* tabs)
 {
+
+
+    seenCount = 0;
+    ZeroMemory(seenDates, sizeof(seenDates));
 
     ClearSearchResults();
 
@@ -4310,7 +4317,7 @@ HWND OpenSearchWindow(HWND hwndParent) {
 
 
     HWND hwnd = CreateWindowExW(
-        0,
+        WS_EX_APPWINDOW,
         CLASS_NAME,
         L"Search",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
