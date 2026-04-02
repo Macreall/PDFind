@@ -20,6 +20,7 @@ LPCWSTR INI_SEARCH = L"C:\\watchFolder\\search_settings.ini";
 
 
 
+
 HWND g_PrintFrame = NULL;
 HWND hOptionsPanel;
 HWND hPreviewFrame;
@@ -890,7 +891,22 @@ void SaveToJson(const wchar_t* date, const wchar_t* path)
 
 
 
+bool ShouldSkip(PRINTER_INFO_2* p)
+{
+    if (p->Attributes & PRINTER_ATTRIBUTE_FAX)
+        return true;
 
+    if (wcsstr(p->pPrinterName, L"OneNote") ||
+        wcsstr(p->pPrinterName, L"PDF") ||
+        wcsstr(p->pPrinterName, L"XPS"))
+        return true;
+
+    if (wcsstr(p->pPortName, L"PORTPROMPT") ||
+        wcsstr(p->pPortName, L"FILE"))
+        return true;
+
+    return false;
+}
 
 
 
@@ -929,6 +945,11 @@ void PopulatePrinterCombo(HWND hCombo)
 
     for (DWORD i = 0; i < returned; i++)
     {
+
+        if (ShouldSkip(&printers[i])) {
+            continue;
+        }
+
         SendMessage(
             hCombo,
             CB_ADDSTRING,
@@ -1285,14 +1306,17 @@ void PrintCurrentPDF(HWND hwnd)
 
    
 
-    int physicalWidth = GetDeviceCaps(hdcPrinter, PHYSICALWIDTH);
-    int physicalHeight = GetDeviceCaps(hdcPrinter, PHYSICALHEIGHT);
-    int physicalOffsetX = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETX);
-    int physicalOffsetY = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETY);
+    int dpiX = GetDeviceCaps(hdcPrinter, LOGPIXELSX);
+    int dpiY = GetDeviceCaps(hdcPrinter, LOGPIXELSY);
 
+    int physW = GetDeviceCaps(hdcPrinter, PHYSICALWIDTH);
+    int physH = GetDeviceCaps(hdcPrinter, PHYSICALHEIGHT);
 
-    int printableWidth = physicalWidth - (2 * physicalOffsetX); 
-    int printableHeight = physicalHeight - (2 * physicalOffsetY);
+    int offsetX = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETX);
+    int offsetY = GetDeviceCaps(hdcPrinter, PHYSICALOFFSETY);
+
+    int printableW = physW - (2 * offsetX);
+    int printableH = physH - (2 * offsetY);
 
 
     for (int c = 0; c < max(1, copies); c++)
@@ -1307,34 +1331,42 @@ void PrintCurrentPDF(HWND hwnd)
             fz_page* page = fz_load_page(pdf_ctx, doc, i);
             fz_rect bounds = fz_bound_page(pdf_ctx, page);
 
-            float pageW = bounds.x1 - bounds.x0;
-            float pageH = bounds.y1 - bounds.y0;
-
-
-            float scaleX = (float)printableWidth / pageW;
-            float scaleY = (float)printableHeight / pageH;
-
-            float scale = min(scaleX, scaleY);
+            float pageW_pts = bounds.x1 - bounds.x0;
+            float pageH_pts = bounds.y1 - bounds.y0;
 
 
 
-            float dpi = (float)GetDeviceCaps(hdcPrinter, LOGPIXELSX);
-            float zoom = dpi / 72.0f;
+            float scaleX = (float)printableW / pageW_pts;
+            float scaleY = (float)printableH / pageH_pts;
 
-            float qualityBoost = 1.5f;
-
-            fz_matrix ctm = fz_scale(zoom * qualityBoost, zoom * qualityBoost);
-
-            ctm = fz_translate(-bounds.x0, -bounds.y0);
+            float scale = (scaleX < scaleY) ? scaleX : scaleY;
 
 
 
+            fz_matrix ctm = fz_identity;
+
+            ctm = fz_concat(ctm, fz_translate(-bounds.x0, -bounds.y0));
+
+            ctm = fz_concat(ctm, fz_scale(scale / 2.9f, scale / 2.9f));
 
 
 
-            fz_rect r = fz_transform_rect(bounds, ctm);
-            fz_irect bbox = fz_round_rect(r);
-            fz_pixmap* pix = fz_new_pixmap_with_bbox(pdf_ctx, fz_device_rgb(pdf_ctx), bbox, NULL, 1);
+            fz_rect transformed = fz_transform_rect(bounds, ctm);
+            fz_irect bbox = fz_round_rect(transformed);
+
+            bbox.x1 += 5000;
+            bbox.y1 += 5000;
+
+            int pixW = bbox.x1 - bbox.x0;
+            int pixH = bbox.y1 - bbox.y0;
+
+            fz_pixmap* pix = fz_new_pixmap_with_bbox(
+                pdf_ctx,
+                fz_device_rgb(pdf_ctx),
+                bbox,
+                NULL,
+                1
+            );
 
 
 
@@ -1345,28 +1377,23 @@ void PrintCurrentPDF(HWND hwnd)
             fz_drop_device(pdf_ctx, dev);
 
 
-            int w = fz_pixmap_width(pdf_ctx, pix);
-            int h = fz_pixmap_height(pdf_ctx, pix);
-
-            //int offsetX = (printableWidth - w) / 2;
-            //int offsetY = (printableHeight - h) / 2;
+   
 
             BITMAPINFO bmi = { 0 };
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-            bmi.bmiHeader.biWidth = w;
-            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biWidth = pixW;
+            bmi.bmiHeader.biHeight = -pixH;
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
 
         
-
             StretchDIBits(
                 hdcPrinter,
                 0, 0,
-                printableWidth, printableHeight,
+                pixW, pixH, 
                 0, 0,
-                w, h,
+                pixW, pixH,
                 fz_pixmap_samples(pdf_ctx, pix),
                 &bmi,
                 DIB_RGB_COLORS,
@@ -1716,9 +1743,7 @@ void SearchJson(const wchar_t* folderPath, TAB_DATA* tab, FOUND_LIST* results)
                     wcscpy_s(seenDates[seenCount], 64, date);
                     seenCount++;
                 }
-                else {
-                    MessageBox(g_pdfFrame, L"Could not find file", L"Error", MB_ICONERROR);
-                }
+                
 
                 break;
             }
