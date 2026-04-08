@@ -20,6 +20,11 @@ LPCWSTR INI_SEARCH = L"C:\\watchFolder\\search_settings.ini";
 
 
 
+#define MAX_PAGES 512
+
+int pageOffsets[MAX_PAGES];
+
+
 
 HWND g_PrintFrame = NULL;
 HWND hOptionsPanel;
@@ -378,6 +383,8 @@ typedef struct {
     LPCWSTR iniPath;
 
     BOOL searchRecursive;
+
+    BOOL saveToJson;
 } TAB_DATA;
 
 
@@ -1347,7 +1354,7 @@ void PrintCurrentPDF(HWND hwnd)
 
             ctm = fz_concat(ctm, fz_translate(-bounds.x0, -bounds.y0));
 
-            ctm = fz_concat(ctm, fz_scale(scale / 2.9f, scale / 2.9f));
+            ctm = fz_concat(ctm, fz_scale(scale / 2.9, scale / 2.9));
 
 
 
@@ -1490,6 +1497,9 @@ void RenderPageToCache(HWND hwnd)
 
     int y_offset = 0;
     for (int i = 0; i < total_pages; i++) {
+
+        pageOffsets[i] = y_offset;
+
         fz_page* page = fz_load_page(pdf_ctx, doc, i);
         fz_rect bounds = fz_bound_page(pdf_ctx, page);
         fz_irect ib = fz_round_rect(bounds);
@@ -1558,7 +1568,7 @@ void RenderPageToCache(HWND hwnd)
 
 
 
-
+ 
 
 
 
@@ -1918,7 +1928,7 @@ void SearchFromIniPaths(int currentPage, FOUND_LIST* results, TAB_DATA* tabs)
         L"JsonSearch",
         L"false",
         jsonFlag,
-        8,
+        32,
         INI_SEARCH
     );
 
@@ -2760,7 +2770,10 @@ void SaveFile(int currentPage, TAB_DATA* tab)
     if (copiedAtLeastOnce)
     {
 
+    
         SaveToJson(firstEditValue, fullPath);
+        
+
 
         DeleteFileW(oldFile);
         MessageBox(NULL, L"File Saved Successfully!", L"Success", MB_OK | MB_TOPMOST);
@@ -4273,21 +4286,46 @@ LRESULT CALLBACK PictureFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     {
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
 
-        scrollY -= delta / 2;
+        RECT client;
+        GetClientRect(hwnd, &client);
+
+        int viewH = client.bottom;
+
+        scrollY -= delta / 4;
+
+        int maxScroll = pdfHeight - viewH;
+        if (maxScroll < 0) maxScroll = 0;
+
+        if (scrollY < 0) scrollY = 0;
+        if (scrollY > maxScroll) scrollY = maxScroll;
+
+        int centerY = scrollY + (viewH / 2);
+
+        int newPage = 1;
+        for (int i = 0; i < total_pages; i++)
+        {
+            int start = pageOffsets[i];
+            int end = (i == total_pages - 1) ? pdfHeight : pageOffsets[i + 1];
+
+            if (centerY >= start && centerY < end)
+            {
+                newPage = i + 1;
+                break;
+            }
+        }
 
 
-        int newPage = (scrollY + 10) / page_height + 1;
-        if (newPage != current_pdf_page && newPage <= total_pages) {
+
+        if (newPage != current_pdf_page && newPage <= total_pages)
+        {
             current_pdf_page = newPage;
+
             WCHAR pageText[64];
             swprintf_s(pageText, 64, L"Page %d / %d", current_pdf_page, total_pages);
             SetWindowTextW(hPageLabel, pageText);
         }
 
-
-        InvalidateRect(g_pictureFrame, NULL, TRUE);
-
-
+        InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     }
 
